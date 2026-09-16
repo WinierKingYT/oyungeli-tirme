@@ -38,7 +38,7 @@ Adopt the V2.0 product-and-threat specification (rev.2) as the accepted directio
 
 The following remain explicitly **open and blocking** further phases, per `AGENTS.md`'s uncertainty protocol — this ADR does not resolve them:
 
-- **D5** — Claude Code / Sonnet version pinning policy (`ASSUMPTION_REQUIRES_APPROVAL` at each phase start rather than fixed now).
+- **D5** — Claude Code / Sonnet version pinning policy remains `ASSUMPTION_REQUIRES_APPROVAL` (no fixed range committed). Per D5's own recording methodology, the exact environment at this ADR's acceptance time is logged here rather than invented as a policy: model `claude-sonnet-5` (displayed as "Sonnet 5"); Claude Code executable observed at `C:\Users\faruk\.local\bin\claude.EXE` (exact CLI version string not captured — `claude --version` is not in `govern_shell.py`'s read-only allowlist and was denied `LEASE_REQUIRED` when attempted in this session, itself a small illustration of D8/evidence-collection needing a broader safe-command allowlist or a controller-mediated path in v2.0). Host: Windows 11 Pro, build 10.0.26200 (`win32`). This snapshot does not constitute a version-range commitment; it is a single dated observation per D5's stated approach.
 - **D8** — Key custody / reviewer identity policy (proposed: SSH-signed receipts by default from R1 up, not just R4 — usability cost not yet evidenced).
 - **D10** — Measurable usability budget (`SPIKE_REQUIRED`; owner = project owner; trigger = completion of the V2-09 pilot batch; fallback = reopening the D4 sandbox mandate if overhead proves unacceptable).
 - The Windows sandbox mechanism itself (Windows Sandbox vs. Hyper-V isolated containers) — `SPIKE_REQUIRED` before the Worktree/Sandbox Manager phase begins.
