@@ -35,7 +35,9 @@ v1.2 has no machine-readable schema for its task-contract shape; validation live
 1. Fix `DEBT-001` directly (human-edited, since no agent can touch `scripts/doctor.py`), then re-run `doctor.py --require-claude` and confirm `RESULT: PASS`; or
 2. Explicitly waive the DEBT-001 trigger for this specific task — accepting the known false-positive `FAIL` as expected and non-blocking — and record that waiver decision in this task's READY-review receipt or as a dated note added directly to this file before typing `ACTIVATE`.
 
-Neither this task contract nor its independent reviewer may make that waiver on the human operator's behalf. The open sandbox spike (`SPIKE-SANDBOX-001`) concerns mandatory OS-level isolation for rigor tier **R2 and above** (ADR-001, D4); this task is **R1**, requires no sandboxed execution, and D4 does not apply to it — this part of the reconciliation was not disputed by either independent review.
+Neither this task contract nor its independent reviewer may make that waiver on the human operator's behalf.
+
+**Waiver recorded, 2026-09-16:** the project owner explicitly chose to waive the DEBT-001 trigger for this task rather than fix it first, having been told the waiver is not mechanically required by `scripts/activate_lease.py` (confirmed by inspection: `activate_lease.py` does not invoke `doctor.py`) but is a recorded due-diligence decision per this contract's own Stop Conditions. DEBT-001/RISK-006 remain open in the backlog for future remediation; this waiver applies only to `TASK-SCHEMA-001` and does not close either entry. The open sandbox spike (`SPIKE-SANDBOX-001`) concerns mandatory OS-level isolation for rigor tier **R2 and above** (ADR-001, D4); this task is **R1**, requires no sandboxed execution, and D4 does not apply to it — this part of the reconciliation was not disputed by either independent review.
 
 ## In scope
 

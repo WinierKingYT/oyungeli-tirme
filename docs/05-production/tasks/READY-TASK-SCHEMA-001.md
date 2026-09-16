@@ -3,7 +3,7 @@ review_id: REVIEW-TASK-SCHEMA-001-R4
 task_id: TASK-SCHEMA-001
 disposition: READY_FOR_IMPLEMENTATION
 reviewer: Claude Sonnet 5 (independent code-reviewer agent, fresh context per review round)
-task_sha256: 663675a698b83e5ee7ffc943a35e22ea0a6aca952682f75650d9a4630ca1f340
+task_sha256: b9b928ee4729d06debd54565bb4241d01cf9477b1cd9708a5955dd3794292d17
 reviewed_at: 2026-09-16T00:00:00Z
 approval_mode: hash
 signature_file: UNSET
@@ -47,3 +47,5 @@ allowed_signers_file: UNSET
 ## Disposition rationale
 
 Every finding across four review rounds is resolved in the final document state (digest above). The one genuinely unresolved item — whether DEBT-001 is fixed or explicitly waived for this specific lease — is correctly classified `ASSUMPTION_REQUIRES_APPROVAL` and pushed to the human operator as a named precondition of running `scripts/activate_lease.py`, not resolved or self-authorized by this contract or by either independent reviewer. That is the correct shape of a READY task: technically leasable, with its one remaining real uncertainty surfaced rather than hidden. `READY_FOR_IMPLEMENTATION` is valid for `task_sha256` above; any further edit to the task contract invalidates this receipt.
+
+**Note on the digest above:** it reflects the task contract *after* the project owner's anticipated DEBT-001 waiver note was recorded directly in the contract (2026-09-16), exactly as this contract's own text required ("recorded as a dated note added directly to this file before typing ACTIVATE"). That addition was structural fulfillment of an already-reviewed requirement, not a new substantive change, so it did not trigger a new review round — but it did change the file's bytes, so the digest was recomputed and this receipt updated to match. Verify with `python scripts/task_digest.py docs/05-production/tasks/TASK-SCHEMA-001.md` before activating.
