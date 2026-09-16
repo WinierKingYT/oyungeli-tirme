@@ -1,6 +1,6 @@
 # Project Status
 
-Updated: 2026-09-16
+Updated: 2026-09-16 (ADR count corrected against ADR-INDEX.md)
 
 | Area | State | Evidence |
 |---|---|---|
@@ -13,7 +13,7 @@ Updated: 2026-09-16
 | Current task | `NONE` | `CURRENT-TASK.md` |
 | Active implementation lease | `INACTIVE` | No lease file |
 | Accepted systems | `0` | System index |
-| Accepted ADRs | `0` | ADR index |
+| Accepted ADRs | `1` | [ADR-INDEX.md](../04-decisions/ADR-INDEX.md) — ADR-001 `ACCEPTED` |
 | Release candidate | `NONE` | None |
 
 ## Immediate next gate
