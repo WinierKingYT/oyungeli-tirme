@@ -1,0 +1,12 @@
+CLAUDE.local.md
+.claude/settings.local.json
+.claude/agent-memory-local/
+.ai-governance/implementation-lease.json
+.ai-governance/implementation-seals/
+.ai-governance/audit.log
+Saved/
+Intermediate/
+DerivedDataCache/
+Binaries/
+__pycache__/
+*.pyc

@@ -1,0 +1,38 @@
+{
+  "shell_deny": [
+    "python scripts/activate_lease.py task.md",
+    "python scripts/deactivate_lease.py",
+    "python scripts/seal_implementation.py",
+    "cat input.txt > Source/Game/X.cpp",
+    "git status && rm -rf build",
+    "/usr/bin/git push origin main",
+    "git -C . push origin main",
+    "git 'push' origin main",
+    "bash -c 'echo unsafe'",
+    "git diff --output=Source/Game/X.cpp",
+    "GIT_EXTERNAL_DIFF=writer git diff",
+    "git -c diff.external=writer diff",
+    "cat ../outside.txt",
+    "cat /tmp/outside.txt",
+    "cat .env",
+    "git status | tee report.txt",
+    "sh -c 'python scripts/activate_lease.py task.md'",
+    "powershell -Command Set-Content x y",
+    "git commit -m bypass",
+    "git tag release-candidate"
+  ],
+  "shell_allow_read_only": [
+    "git status",
+    "git diff",
+    "git log -1",
+    "rg task_id docs",
+    "python scripts/doctor.py",
+    "python scripts/doctor.py --require-claude",
+    "python scripts/task_digest.py docs/task.md",
+    "python scripts/artifact_digest.py docs/evidence"
+  ],
+  "outside_write_targets": [
+    "../escape.cpp",
+    "/tmp/escape.cpp"
+  ]
+}
