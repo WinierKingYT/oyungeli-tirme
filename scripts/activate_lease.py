@@ -73,7 +73,7 @@ def require_git_tracked(path: Path, label: str) -> None:
     relative = path.relative_to(ROOT).as_posix()
     result = subprocess.run(
         ["git", "ls-files", "--error-unmatch", "--", relative], cwd=ROOT,
-        text=True, capture_output=True, check=False, timeout=10,
+        text=True, encoding="utf-8", errors="replace", capture_output=True, check=False, timeout=10,
     )
     if result.returncode != 0:
         fail(f"{label} must be tracked in the base Git commit: {relative}")

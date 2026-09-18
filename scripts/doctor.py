@@ -56,7 +56,7 @@ def main() -> None:
     else:
         repository = subprocess.run(
             [git, "rev-parse", "--show-toplevel"], cwd=ROOT,
-            text=True, capture_output=True, check=False,
+            text=True, encoding="utf-8", errors="replace", capture_output=True, check=False,
         )
         if repository.returncode != 0 or Path(repository.stdout.strip()).resolve() != ROOT.resolve():
             message = "package must be installed at the Git repository root"
@@ -73,7 +73,7 @@ def main() -> None:
         else:
             warnings.append(message + "; run again with --require-claude in the actual developer environment")
     else:
-        completed = subprocess.run([claude, "--version"], text=True, capture_output=True, check=False)
+        completed = subprocess.run([claude, "--version"], text=True, encoding="utf-8", errors="replace", capture_output=True, check=False)
         if completed.returncode != 0:
             warnings.append("Claude Code version could not be queried")
 
@@ -91,7 +91,7 @@ def main() -> None:
     probe = subprocess.run(
         [sys.executable, str(hook)],
         input=json.dumps(payload),
-        text=True,
+        text=True, encoding="utf-8", errors="replace",
         capture_output=True,
         env=env,
         check=False,
@@ -101,7 +101,7 @@ def main() -> None:
 
     validation = subprocess.run(
         [sys.executable, str(ROOT / "scripts" / "validate_os.py")],
-        text=True,
+        text=True, encoding="utf-8", errors="replace",
         capture_output=True,
         env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
         check=False,

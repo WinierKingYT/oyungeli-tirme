@@ -135,7 +135,7 @@ def git_state(root: Path) -> tuple[dict[str, str] | None, str]:
     """Return the repository identity used to bind implementation authority."""
     try:
         top = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"], cwd=root, text=True,
+            ["git", "rev-parse", "--show-toplevel"], cwd=root, text=True, encoding="utf-8", errors="replace",
             capture_output=True, check=False, timeout=10,
         )
         if top.returncode != 0:
@@ -144,11 +144,11 @@ def git_state(root: Path) -> tuple[dict[str, str] | None, str]:
         if git_root != root.resolve():
             return None, "AI Game Development OS must be installed at the Git repository root"
         head = subprocess.run(
-            ["git", "rev-parse", "HEAD"], cwd=root, text=True,
+            ["git", "rev-parse", "HEAD"], cwd=root, text=True, encoding="utf-8", errors="replace",
             capture_output=True, check=False, timeout=10,
         )
         branch = subprocess.run(
-            ["git", "branch", "--show-current"], cwd=root, text=True,
+            ["git", "branch", "--show-current"], cwd=root, text=True, encoding="utf-8", errors="replace",
             capture_output=True, check=False, timeout=10,
         )
         if head.returncode != 0 or branch.returncode != 0:
@@ -166,7 +166,7 @@ def git_worktree_clean(root: Path) -> tuple[bool, str]:
     try:
         status = subprocess.run(
             ["git", "status", "--porcelain=v1", "--untracked-files=all"],
-            cwd=root, text=True, capture_output=True, check=False, timeout=10,
+            cwd=root, text=True, encoding="utf-8", errors="replace", capture_output=True, check=False, timeout=10,
         )
     except (OSError, subprocess.SubprocessError):
         return False, "Git worktree status could not be verified"

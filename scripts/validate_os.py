@@ -84,7 +84,7 @@ def hook_process(script: Path, root: Path, payload: dict, extra_env: dict[str, s
     return subprocess.run(
         [sys.executable, str(script)],
         input=json.dumps(payload),
-        text=True,
+        text=True, encoding="utf-8", errors="replace",
         capture_output=True,
         env=env,
         check=False,
@@ -271,10 +271,10 @@ def validate_hooks(v: Validation) -> None:
         subprocess.run(["git", "add", "."], cwd=root, check=True)
         subprocess.run(["git", "commit", "-qm", "validation base"], cwd=root, check=True)
         git_head = subprocess.run(
-            ["git", "rev-parse", "HEAD"], cwd=root, text=True, capture_output=True, check=True
+            ["git", "rev-parse", "HEAD"], cwd=root, text=True, encoding="utf-8", errors="replace", capture_output=True, check=True
         ).stdout.strip()
         git_branch = subprocess.run(
-            ["git", "branch", "--show-current"], cwd=root, text=True, capture_output=True, check=True
+            ["git", "branch", "--show-current"], cwd=root, text=True, encoding="utf-8", errors="replace", capture_output=True, check=True
         ).stdout.strip() or "DETACHED"
         lease = {
             "schema": 3,
@@ -398,7 +398,7 @@ def validate_repository_attestation(v: Validation) -> None:
         subprocess.run(["git", "commit", "-qm", "tracked review for ignored task probe"], cwd=project, check=True)
         ignored_activation = subprocess.run(
             [sys.executable, "scripts/activate_lease.py", "ignored-task.md", "--hours", "1"],
-            cwd=project, input="TASK-IGNORED\nACTIVATE\n", text=True,
+            cwd=project, input="TASK-IGNORED\nACTIVATE\n", text=True, encoding="utf-8", errors="replace",
             capture_output=True, check=False,
         )
         v.check(ignored_activation.returncode == 2, "ignored/untracked authority document must not activate a lease")
@@ -406,14 +406,14 @@ def validate_repository_attestation(v: Validation) -> None:
         dirty_marker.write_text("uncommitted\n", encoding="utf-8")
         dirty_activation = subprocess.run(
             [sys.executable, "scripts/activate_lease.py", "docs/05-production/tasks/TASK-TEST-ATTEST.md", "--hours", "1"],
-            cwd=project, input="TASK-TEST-ATTEST\nACTIVATE\n", text=True,
+            cwd=project, input="TASK-TEST-ATTEST\nACTIVATE\n", text=True, encoding="utf-8", errors="replace",
             capture_output=True, check=False,
         )
         v.check(dirty_activation.returncode == 2, "lease activation must reject a dirty worktree")
         dirty_marker.unlink()
         activation = subprocess.run(
             [sys.executable, "scripts/activate_lease.py", "docs/05-production/tasks/TASK-TEST-ATTEST.md", "--hours", "1"],
-            cwd=project, input="TASK-TEST-ATTEST\nACTIVATE\n", text=True,
+            cwd=project, input="TASK-TEST-ATTEST\nACTIVATE\n", text=True, encoding="utf-8", errors="replace",
             capture_output=True, check=False,
         )
         v.check(activation.returncode == 0, f"schema-3 interactive lease activation must pass: {activation.stderr.strip()}")
@@ -429,13 +429,13 @@ def validate_repository_attestation(v: Validation) -> None:
         outside.write_text("int outside = 1;\n", encoding="utf-8")
         rejected_seal = subprocess.run(
             [sys.executable, "scripts/seal_implementation.py"], cwd=project,
-            text=True, capture_output=True, check=False,
+            text=True, encoding="utf-8", errors="replace", capture_output=True, check=False,
         )
         v.check(rejected_seal.returncode != 0, "seal must reject changed paths outside the active lease")
         outside.unlink()
         sealed = subprocess.run(
             [sys.executable, "scripts/seal_implementation.py"], cwd=project,
-            text=True, capture_output=True, check=False,
+            text=True, encoding="utf-8", errors="replace", capture_output=True, check=False,
         )
         v.check(sealed.returncode == 0, f"implementation seal must pass for task-scoped diff: {sealed.stderr.strip()}")
         try:
@@ -456,7 +456,7 @@ def validate_repository_attestation(v: Validation) -> None:
             v.check(decision(post_seal) == "deny", "post-seal production writes must be denied")
             duplicate_seal = subprocess.run(
                 [sys.executable, "scripts/seal_implementation.py"], cwd=project,
-                text=True, capture_output=True, check=False,
+                text=True, encoding="utf-8", errors="replace", capture_output=True, check=False,
             )
             v.check(duplicate_seal.returncode != 0, "a sealed lease must not create or overwrite another seal")
         except Exception as exc:
@@ -547,7 +547,7 @@ def validate_ssh_approval(v: Validation) -> None:
         subprocess.run(["git", "commit", "-qm", "signed R4 approval"], cwd=project, check=True)
         activated = subprocess.run(
             [sys.executable, "scripts/activate_lease.py", "docs/05-production/tasks/TASK-R4-SIGNED.md", "--hours", "1"],
-            cwd=project, input="TASK-R4-SIGNED\nACTIVATE\n", text=True,
+            cwd=project, input="TASK-R4-SIGNED\nACTIVATE\n", text=True, encoding="utf-8", errors="replace",
             capture_output=True, check=False,
         )
         v.check(activated.returncode == 0, f"valid SSH-signed R4 task must activate: {activated.stderr.strip()}")
