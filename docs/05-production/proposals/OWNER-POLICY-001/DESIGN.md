@@ -30,7 +30,7 @@ The agent works in its own `git worktree` on the `agent/work` branch, never in t
 
 ## When policy mode applies
 
-Policy mode means: a valid policy file is present. In policy mode every decision that would need a human answer becomes `deny`, including MCP filesystem tools. Exact new-file writes of task contracts and READY receipts under `docs/05-production/tasks` are allowed without a prompt; other documentation writes keep today's decision, which may still be a prompt.
+Policy mode means: a valid policy file is present. In policy mode every decision that would need a human answer becomes `deny`, including MCP filesystem tools. Writes of NEW or untracked task contracts and READY receipts (`docs/05-production/tasks/TASK-*.md`, `READY-TASK-*.md`) are allowed without a prompt; overwriting an existing or tracked file, any other document, and acceptance receipts are denied (Patch A, `path_is_untracked`).
 
 Consequences stated plainly: with `allowed_commands` empty and every `ask` denied, agents cannot run tests or compile under an unattended lease, so unattended lane commits carry no test or runtime evidence; that evidence comes from the owner at review. The owner may put exact command patterns in `policy.allowed_commands` (for example a Unity batch-mode test invocation) to change this. Process rule: no documentation writes while a lease is active (they make the seal fail, see `DEBT-003`).
 
@@ -52,10 +52,10 @@ The hook first requires the raw command (not the stripped one) to satisfy `comma
 Common rules: absolute path to `git`; environment scrubbed (`GIT_DIR`, `GIT_INDEX_FILE`, `GIT_AUTHOR_*`, `GIT_COMMITTER_*`, `PYTHON*` removed); the current branch must be exactly `agent/work`, which the owner creates once (the script never creates a branch); HEAD must equal the lease base commit; the index must start empty; staging uses `git --literal-pathspecs add --pathspec-from-file=- --pathspec-file-nul`; every staged mode must be `100644` (no symlinks or gitlinks); commit with `--no-verify -c core.hooksPath=<empty controlled directory> -c core.fsmonitor=false --message=<subject>`, the owner's configured identity, and no `--amend`, `-a`, `--allow-empty`, or `--author`; the lease is then marked `COMMITTED` so a second run refuses.
 
 - **Lane commit** (no argument): requires a `SEALED` owner-policy lease and recomputes the seal digest with a sealed-lease verifier (below). It stages exactly the sealed `changed_paths`, each inside a lane and outside every deny entry, plus one new ledger file. It rejects any modified or deleted tracked file under `docs/`.
-- **Task-document commit** (`--task-docs`): no lease. It stages only new, untracked files matching the anchored regexes `docs/05-production/tasks/TASK-[A-Z0-9._-]+\.md` and `docs/05-production/tasks/READY-TASK-[A-Z0-9._-]+\.md` (no `ACCEPT-*`, no evidence packs, no other path, no `:`), after validating the contract's front matter: valid `rigor`, empty `allowed_commands`, `commit_subject`, `approval_mode: hash`, receipt present with a matching hash, `approved_by` drawn from `policy.reviewer_ids` (never the owner's name), reviewer different from author, paths inside a lane. If any other untracked file exists the whole run refuses. It runs on the same branch and counts against the daily cap. This is where an agent effectively approves its own contract; it is procedural, and the owner sees it at merge.
+- **Task-document commit** (`--task-docs`): no lease. It stages only new, untracked files matching the anchored regexes `docs/05-production/tasks/TASK-[A-Z0-9._-]+\.md` and `docs/05-production/tasks/READY-TASK-[A-Z0-9._-]+\.md` (no `ACCEPT-*`, no evidence packs, no other path, no `:`), after validating the contract's front matter: valid `rigor`, empty `allowed_commands`, `commit_subject`, `approval_mode: hash`, receipt present with a matching hash, `approved_by` drawn from `policy.reviewer_ids` and `authored_by` outside it, reviewer different from author, paths inside a lane. `reviewer_ids` is only a label allowlist: the reviewer string in a receipt is typed by an agent, so it authenticates nothing; it prevents typos and naming the owner. An empty list or a template placeholder is refused. If any other untracked file exists the whole run refuses. It runs on the same branch and counts against the daily cap. This is where an agent effectively approves its own contract; it is procedural, and the owner sees it at merge.
 - **No unattended `ACCEPTED`.** Agents never commit `ACCEPT-*` receipts or evidence packs. Lane work stays `IMPLEMENTED`; the owner's merge review is the acceptance gate, and the owner commits any acceptance receipt.
 - **Lease states.** `activate_lease.py` must accept `COMMITTED` next to `SEALED` as an archivable prior state, or every second lease would need the owner's terminal. Patch B adds a test that reactivates after a commit.
-- **Sealed-lease verifier.** `load_lease` gets an `allow_sealed` parameter (not a copy). It requires the lease's recorded policy hash to equal the current policy file's hash, verifies `implementation_seal_sha256`, and requires the commit within `max_lease_hours` of the seal.
+- **Sealed-lease verifier.** Patch A gives `load_lease` an `allow_sealed` parameter (not a copy); it only widens the accepted states. Patch B's `agent_commit.py` performs the rest: the lease's recorded policy hash must equal the current policy file's hash, `implementation_seal_sha256` must verify, and the commit must come within `max_lease_hours` of the seal. In Patch A the shell hook admits the commit form only for a `SEALED` lease with `authority: owner-policy`.
 - **Ledger:** one new file per commit, `docs/07-evidence/agent-ledger/<seal-sha>.json`, with lease id, policy hash, seal hash, changed paths, and the hash of the previous ledger file (a chain).
 - **Volume caps:** `max_unmerged_commits` and `max_unmerged_paths` counted against `main`; the script refuses beyond them so the merge review stays possible.
 
@@ -80,6 +80,9 @@ The lease records `authority: owner-policy`, the policy id, and the SHA-256 of t
   "expires_at": null,
   "max_lease_hours": 8,
   "required_branch": "agent/work",
+  "base_branch": "main",
+  "effective_rigor_cap": "R1",
+  "git_executable": "<absolute path written by owner_policy.py>",
   "max_changed_paths": 40,
   "max_total_bytes": 2000000,
   "max_leases_per_day": 12,
@@ -96,11 +99,17 @@ The lease records `authority: owner-policy`, the policy id, and the SHA-256 of t
 }
 ```
 
-`**/*.asmdef` is denied, so the owner pre-creates each lane's assembly definition once (as part of `UNITY-SETUP-001`) and it stays immutable. The owner edits this policy before use; anything left out is not authorized.
+`**/*.asmdef` is denied, so the owner pre-creates each lane's assembly definition once (as part of `UNITY-SETUP-001`) and it stays immutable. The owner edits this policy before use; anything left out is not authorized. Policy-owned values: `effective_rigor_cap` (`R1` until the D4 sandbox is accepted), `base_branch` (the ref the unmerged caps count against), and `git_executable` (absolute path, written by `owner_policy.py`; `agent_commit.py` and the patched scripts use it instead of `PATH`, and every `GIT_*` environment variable is scrubbed by prefix).
+
+## Operating rules for the owner
+
+- Merge `main` into `agent/work` before each agent session; otherwise the agent works from stale authority documents and stale hooks.
+- Use an ASCII-only worktree path outside the main tree (the main path contains `ş`, which caused `DEBT-001`); start the agent session with its working directory at the worktree root.
+- Read `git diff main..agent/work` before merging, and before opening Unity on the merged result.
 
 ## Seal-time checks on lane files
 
-Every changed file's extension is in its lane's list; no nested `.gitignore` or `.gitattributes`; no ignored file exists inside a lane (`git status --ignored`); every `.meta` GUID is unique across the project; and `.cs` files pass an allowlist scan: only `using` of `System`, `System.Collections`, `System.Collections.Generic`, `System.Linq`, and `UnityEngine*` namespaces; rejected tokens include `\u` escapes, `extern`, `unsafe`, `#if`, `Type.GetType`, `Activator`, `Marshal`, `System.IO`, `System.Net`, `Environment`, `Process.`, `Reflection`, `GetMethod`, `GetType`, `Expressions`, `PlayerPrefs`, `Application.`, `UnityEngine.Networking`, `UnityEngine.Windows`, `UnityEditor`, `InitializeOnLoad`, and `DllImport`. The scan is a speed bump, not a sandbox: it can be evaded, for example by reflection that needs no `using`. Persistence code that needs `System.IO` needs the owner, which matches the rigor model (R3).
+Every changed file's extension is in its lane's list; no nested `.gitignore` or `.gitattributes`; no ignored file exists inside a lane (`git status --ignored`); every `.meta` GUID is unique across the project; and `.cs` files pass an allowlist scan: only `using` of `System`, `System.Collections`, `System.Collections.Generic`, `System.Linq`, and `UnityEngine*` namespaces; the namespace match is segment-aware (`UnityEngine(\.\w+)*`, minus the banned sub-namespaces); `using static`, alias `using X = Y`, and `global using` are rejected; rejected tokens include `\u` escapes, `extern`, `unsafe`, `#if`, `Type.GetType`, `Activator`, `Marshal`, `System.IO`, `System.Net`, `Environment.`, `Process.`, `Reflection`, `GetMethod`, `GetField`, `GetProperty`, `MethodInfo`, `Expressions`, `PlayerPrefs`, `Application.OpenURL`, `UnityEngine.Networking`, `UnityEngine.Windows`, `UnityEditor`, `InitializeOnLoad`, and `DllImport`. Specific members are banned rather than whole classes so ordinary code (`Application.targetFrameRate`, `obj.GetType()`) is not rejected; `.meta` GUIDs are checked for collisions only for new or changed files. The scan is a speed bump, not a sandbox: it can be evaded, for example by reflection that needs no `using`. Persistence code that needs `System.IO` needs the owner, which matches the rigor model (R3).
 
 ## Accepted risks
 
@@ -115,8 +124,8 @@ Every changed file's extension is in its lane's list; no nested `.gitignore` or 
 
 Two patches, each with the applier integrity controls from `DEBT-FIX-001` (committed directory, hash pinned out of band, `git diff` read after applying) and tests run in a scratch copy.
 
-- **Patch A, inert without a policy:** `common.py` (policy loading, sealed-lease verifier via `load_lease(allow_sealed=...)`, casefolded project-root path matching, controlled-path additions, forbidden script names), `govern_shell.py`, `govern_write.py`, `govern_mcp.py` (recognition and `ask` to `deny`), `.gitignore`.
-- **Patch B:** `activate_lease.py` (policy mode, `COMMITTED` prior state) and `seal_implementation.py` (policy mode, seal-time checks), new `scripts/agent_commit.py`, new human-run `scripts/owner_policy.py` (template, verify, revoke), `tests/governance_attack_corpus.json`, `scripts/validate_os.py`.
+- **Patch A, inert without a policy (`apply_patch_a.py`, described in `PATCH-A.md`):** `common.py` (strict policy loading, `load_lease(allow_sealed=...)`, controlled-path additions, the policy hash in the audit log, `ask` to `deny` in `emit_decision`, which also covers MCP), `govern_shell.py` (exact forms, forbidden script names, which also deny read-only commands that merely mention `agent_commit.py` or `owner_policy.py`), `govern_write.py` (root-relative, case-insensitive controlled-path check; drafting new task files), the hook and function tests in `validate_os.py` (no corpus change), and `.gitignore` entries for every runtime file: `.ai-governance/owner-policy.json`, the leases-per-day counter file, and the empty hooks directory (with DEBT-FIX-001 applied, any untracked file under `.ai-governance/` blocks every activation).
+- **Patch B:** `activate_lease.py` (policy mode, `COMMITTED` prior state) and `seal_implementation.py` (policy mode, seal-time checks), new `scripts/agent_commit.py`, new human-run `scripts/owner_policy.py` (template, verify, revoke), and their tests. Both patches touch `validate_os.py`; Patch B's applier anchors are written against the tree after Patch A is committed. Patch B also adds `owner-policy.json`, `lease-counter.json`, and `empty-hooks` to the copy-ignore list of the attestation and R4 tests in `validate_os.py`, so a real policy is never copied into a test repository.
 
 ## Tests required
 
