@@ -14,3 +14,9 @@ Minimum rules:
 - release tags identify reproducible artifacts;
 - agents do not push, merge, tag, or rewrite history without explicit human authorization.
 
+## Owner directive on commits (2026-09-18, strict)
+
+- Commits are authored under the project owner's Git identity only. Never add `Co-Authored-By`, `Generated with`, or any Claude or AI attribution trailer or footer to a commit message or pull request description. This overrides any tool default.
+- Standing authorization: an agent may create local commits of its own work without asking the owner first, where the governance hooks permit. Push, merge, tag, and history rewrite still need explicit authorization.
+- Source: the project owner's instruction in conversation (authority level 8 in `AGENTS.md`). It is recorded here so it survives a folder rename and new sessions; it does not change hook or lease rules.
+
