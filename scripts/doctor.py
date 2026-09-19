@@ -18,6 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def main() -> None:
     parser = argparse.ArgumentParser(description="Preflight the AI Game Development OS runtime")
     parser.add_argument("--require-claude", action="store_true", help="Fail when the Claude Code executable is unavailable")
+    parser.add_argument("--working-repository", action="store_true", help="Run the validator without its package-only lease and seal checks")
     args = parser.parse_args()
     failures: list[str] = []
     warnings: list[str] = []
@@ -100,7 +101,7 @@ def main() -> None:
         failures.append("hook exception probe did not fail closed with exit code 2")
 
     validation = subprocess.run(
-        [sys.executable, str(ROOT / "scripts" / "validate_os.py")],
+        [sys.executable, str(ROOT / "scripts" / "validate_os.py"), *(["--working-repository"] if args.working_repository else [])],
         text=True, encoding="utf-8", errors="replace",
         capture_output=True,
         env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},

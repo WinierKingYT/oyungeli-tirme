@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 import os
@@ -106,15 +107,25 @@ def sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def validate_files(v: Validation) -> None:
+def validate_files(v: Validation, working_repository: bool = False) -> None:
     for relative in REQUIRED:
         v.check((ROOT / relative).is_file(), f"missing required file: {relative}")
     v.check(len((ROOT / "CLAUDE.md").read_text(encoding="utf-8").splitlines()) < 200, "CLAUDE.md must remain under 200 lines")
     version = (ROOT / "VERSION").read_text(encoding="utf-8")
     v.check("AI Game Development OS 1.2.0" in version and "Schema: 3" in version, "VERSION must declare v1.2.0 schema 3")
-    v.check(not (ROOT / ".ai-governance" / "implementation-lease.json").exists(), "deliverable must not contain an active implementation lease")
-    seal_dir = ROOT / ".ai-governance" / "implementation-seals"
-    v.check(not seal_dir.exists() or not any(seal_dir.iterdir()), "deliverable must not contain an implementation seal")
+    if working_repository:
+        tracked = subprocess.run(
+            ["git", "ls-files", "--", ".ai-governance/implementation-lease.json", ".ai-governance/implementation-seals"],
+            cwd=ROOT, text=True, encoding="utf-8", errors="replace", capture_output=True, check=False,
+        )
+        v.check(
+            tracked.returncode == 0 and not tracked.stdout.strip(),
+            "a lease or implementation seal must never be tracked by Git (working-repository mode needs a Git repository)",
+        )
+    else:
+        v.check(not (ROOT / ".ai-governance" / "implementation-lease.json").exists(), "deliverable must not contain an active implementation lease")
+        seal_dir = ROOT / ".ai-governance" / "implementation-seals"
+        v.check(not seal_dir.exists() or not any(seal_dir.iterdir()), "deliverable must not contain an implementation seal")
     for path in list((ROOT / ".claude/hooks").glob("*.py")) + list((ROOT / "scripts").glob("*.py")):
         try:
             compile(path.read_text(encoding="utf-8"), str(path), "exec")
@@ -332,7 +343,12 @@ def validate_hooks(v: Validation) -> None:
 def validate_repository_attestation(v: Validation) -> None:
     with tempfile.TemporaryDirectory(prefix="aigdo-attestation-") as temp:
         project = Path(temp) / "project"
-        shutil.copytree(ROOT, project, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+        shutil.copytree(
+            ROOT, project,
+            ignore=shutil.ignore_patterns(
+                "__pycache__", "*.pyc", "implementation-lease.json", "implementation-seals", "scheduled_tasks.lock",
+            ),
+        )
         subprocess.run(["git", "init", "-q"], cwd=project, check=True)
         subprocess.run(["git", "config", "user.email", "validator@example.invalid"], cwd=project, check=True)
         subprocess.run(["git", "config", "user.name", "AIGDO Validator"], cwd=project, check=True)
@@ -402,6 +418,27 @@ def validate_repository_attestation(v: Validation) -> None:
             capture_output=True, check=False,
         )
         v.check(ignored_activation.returncode == 2, "ignored/untracked authority document must not activate a lease")
+        def activate_attest_task(*extra: str) -> subprocess.CompletedProcess[str]:
+            return subprocess.run(
+                [sys.executable, "scripts/activate_lease.py", "docs/05-production/tasks/TASK-TEST-ATTEST.md", "--hours", "1", *extra],
+                cwd=project, input="TASK-TEST-ATTEST\nACTIVATE\n", text=True, encoding="utf-8", errors="replace",
+                capture_output=True, check=False,
+            )
+
+        inherited_marker = source / "INHERITED.tmp"
+        inherited_marker.write_text("inherited\n", encoding="utf-8")
+        refused_inherit = activate_attest_task()
+        v.check(
+            refused_inherit.returncode == 2 and "--inherit-dirty" in refused_inherit.stderr,
+            "dirty paths inside allowed_paths must need --inherit-dirty",
+        )
+        inherited_activation = activate_attest_task("--inherit-dirty")
+        v.check(
+            inherited_activation.returncode == 0 and "INHERITED.tmp" in inherited_activation.stdout,
+            f"--inherit-dirty must accept and list dirty paths inside allowed_paths: {inherited_activation.stderr.strip()}",
+        )
+        (project / ".ai-governance" / "implementation-lease.json").unlink(missing_ok=True)
+        inherited_marker.unlink()
         dirty_marker = project / "DIRTY.tmp"
         dirty_marker.write_text("uncommitted\n", encoding="utf-8")
         dirty_activation = subprocess.run(
@@ -410,6 +447,7 @@ def validate_repository_attestation(v: Validation) -> None:
             capture_output=True, check=False,
         )
         v.check(dirty_activation.returncode == 2, "lease activation must reject a dirty worktree")
+        v.check("DIRTY.tmp" in dirty_activation.stderr, "dirty-worktree rejection must name the offending path")
         dirty_marker.unlink()
         activation = subprocess.run(
             [sys.executable, "scripts/activate_lease.py", "docs/05-production/tasks/TASK-TEST-ATTEST.md", "--hours", "1"],
@@ -424,6 +462,40 @@ def validate_repository_attestation(v: Validation) -> None:
             v.check(bool(lease.get("git_head")) and bool(lease.get("git_branch")), "lease must bind Git HEAD and branch")
         except Exception as exc:
             v.check(False, f"activated lease must be readable: {exc}")
+        second_activation = activate_attest_task()
+        v.check(
+            second_activation.returncode == 2 and "unexpired ACTIVE lease" in second_activation.stderr,
+            "activation must refuse to overwrite an unexpired ACTIVE lease",
+        )
+        if lease_path.is_file():
+            active_text = lease_path.read_text(encoding="utf-8")
+            bogus_lease = json.loads(active_text)
+            bogus_lease["state"] = "../BOGUS"
+            lease_path.write_text(json.dumps(bogus_lease), encoding="utf-8")
+            bogus_activation = activate_attest_task()
+            v.check(
+                bogus_activation.returncode == 2 and "unknown state" in bogus_activation.stderr,
+                "activation must refuse a lease file in an unknown state",
+            )
+            listed_state = json.loads(active_text)
+            listed_state["state"] = ["ACTIVE"]
+            lease_path.write_text(json.dumps(listed_state), encoding="utf-8")
+            listed_activation = activate_attest_task()
+            v.check(
+                listed_activation.returncode == 2 and "unreadable" in listed_activation.stderr,
+                "activation must refuse a lease file whose state is not a string",
+            )
+            sealed_lease = json.loads(active_text)
+            sealed_lease["state"] = "SEALED"
+            lease_path.write_text(json.dumps(sealed_lease), encoding="utf-8")
+            reactivation = activate_attest_task()
+            prior_archives = list(
+                (project / ".ai-governance" / "implementation-seals").glob("PRIOR-TASK-TEST-ATTEST-SEALED-*.json")
+            )
+            v.check(
+                reactivation.returncode == 0 and len(prior_archives) == 1,
+                f"activation over a SEALED lease must archive it: {reactivation.stderr.strip()}",
+            )
         (source / "X.cpp").write_text("int attested = 1;\n", encoding="utf-8")
         outside = project / "Source" / "Outside.cpp"
         outside.write_text("int outside = 1;\n", encoding="utf-8")
@@ -500,7 +572,12 @@ def validate_ssh_approval(v: Validation) -> None:
         v.check(rejected.returncode != 0, "tampered R4 approval receipt must be rejected")
 
         project = root / "r4-project"
-        shutil.copytree(ROOT, project, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+        shutil.copytree(
+            ROOT, project,
+            ignore=shutil.ignore_patterns(
+                "__pycache__", "*.pyc", "implementation-lease.json", "implementation-seals", "scheduled_tasks.lock",
+            ),
+        )
         subprocess.run(["git", "init", "-q"], cwd=project, check=True)
         subprocess.run(["git", "config", "user.email", "validator@example.invalid"], cwd=project, check=True)
         subprocess.run(["git", "config", "user.name", "AIGDO Validator"], cwd=project, check=True)
@@ -554,8 +631,15 @@ def validate_ssh_approval(v: Validation) -> None:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description="Mechanical and adversarial validation")
+    parser.add_argument(
+        "--working-repository",
+        action="store_true",
+        help="Skip the package-only checks that reject a local lease or implementation seals",
+    )
+    args = parser.parse_args()
     v = Validation()
-    validate_files(v)
+    validate_files(v, args.working_repository)
     validate_settings(v)
     validate_frontmatter(v)
     validate_hooks(v)

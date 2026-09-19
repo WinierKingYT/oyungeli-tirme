@@ -27,7 +27,7 @@ def git_bytes(*args: str) -> bytes:
 
 def changed_paths() -> list[str]:
     groups = (
-        git_bytes("diff", "--name-only", "-z", "HEAD"),
+        git_bytes("diff", "--name-only", "--no-renames", "-z", "HEAD"),
         git_bytes("ls-files", "--others", "--exclude-standard", "-z"),
     )
     return sorted({item.decode("utf-8") for group in groups for item in group.split(b"\0") if item})
@@ -68,6 +68,7 @@ def main() -> None:
         "changed_paths": paths,
         "diff_sha256": digest.hexdigest(),
         "untracked_file_sha256": untracked_hashes,
+        "inherited_paths": lease.get("inherited_paths", {}),
         "sealed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
     }
     seal_dir = ROOT / ".ai-governance" / "implementation-seals"

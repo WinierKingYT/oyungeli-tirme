@@ -10,7 +10,7 @@
 | P1 | ADR-003 | Unity version, render pipeline, project layout | ADR | OWNER-INPUT-001 | Accepted ADR |
 | P1 | UNITY-SETUP-001 | Create the Unity project at the repository root using `UNITY-REPO-HYGIENE.md` | Task | ADR-003, `unity.md` accepted | Independent acceptance receipt |
 | P1 | PROTO-LANE-001 | Draft and review `TASK-PROTO-LANE-001` per `PROTOTYPE-LANE.md` | Task | GOV-002, UNITY-SETUP-001 | Contract `READY_FOR_IMPLEMENTATION` |
-| P1 | DEBT-FIX-001 | Prepare, review, and apply the human-only fix bundle for `DEBT-002`, `DEBT-003`, `DEBT-006` | Bug fix | None | Owner applies patches; validators pass. Status 2026-09-19: proposal revision 3 in `docs/05-production/proposals/DEBT-FIX-001/`, two independent static reviews `READY` for the owner's dry run; not applied, nothing executed |
+| P1 | DEBT-FIX-001 | Prepare, review, and apply the human-only fix bundle for `DEBT-002`, `DEBT-003`, `DEBT-006` | Bug fix | None | Owner applies patches; validators pass. Status 2026-09-19: applied by the owner (revision 3, `docs/05-production/proposals/DEBT-FIX-001/`); `validate_os.py --working-repository` (175 checks) and `doctor.py --working-repository` pass; the five patched files are not yet committed |
 | P2 | DEBT-005 | Retarget Unreal-shaped rules and docs for Unity | Cleanup | UNITY-SETUP-001 | `TECH-DEBT.md` entry closed |
 | P1 | ARCH-001 | Build system and ownership map | Architecture | DISCOVERY-001 | Accepted map and unknowns closed |
 | P1 | DESIGN-001 | Validate core-loop hypotheses | Design/playtest | Discovery | Hypothesis decisions linked to evidence |

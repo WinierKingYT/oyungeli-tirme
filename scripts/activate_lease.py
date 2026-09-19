@@ -17,7 +17,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 HOOKS = ROOT / ".claude" / "hooks"
 sys.path.insert(0, str(HOOKS))
-from common import git_state, git_worktree_clean, parse_frontmatter  # noqa: E402
+from common import CONTROLLED_PATHS, git_dirty_paths, git_state, matches_any, parse_frontmatter  # noqa: E402
 
 
 UNSAFE_COMMAND = re.compile(r"[\n\r;|><`&]|\$\(")
@@ -83,6 +83,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Activate a scoped implementation lease")
     parser.add_argument("task_contract", help="Approved task contract path")
     parser.add_argument("--hours", type=float, default=8.0, help="Lease duration, maximum 24")
+    parser.add_argument(
+        "--inherit-dirty",
+        action="store_true",
+        help="Accept uncommitted changes that already sit inside the task's allowed_paths",
+    )
     args = parser.parse_args()
 
     if not 0 < args.hours <= 24:
@@ -173,9 +178,28 @@ def main() -> None:
     repository, repository_reason = git_state(ROOT)
     if not repository:
         fail(repository_reason)
-    clean, clean_reason = git_worktree_clean(ROOT)
-    if not clean:
-        fail(clean_reason)
+    dirty, dirty_reason = git_dirty_paths(ROOT)
+    if dirty is None:
+        fail(dirty_reason)
+    protected = {relative_task.as_posix().casefold(), relative_review.as_posix().casefold()}
+    if meta["approval_mode"] == "ssh-signature":
+        for signature_key in ("signature_file", "allowed_signers_file"):
+            protected.add(inside_project(str(review_meta[signature_key]), signature_key)[1].as_posix().casefold())
+    tampered = [path for path in dirty if path.casefold() in protected or matches_any(path, CONTROLLED_PATHS)]
+    if tampered:
+        fail("approved authority and controlled governance files must be committed and unmodified: " + ", ".join(ascii(path) for path in tampered))
+    outside = [path for path in dirty if not matches_any(path, meta["allowed_paths"])]
+    if outside:
+        shown = ", ".join(ascii(path) for path in outside[:5]) + (" ..." if len(outside) > 5 else "")
+        fail(f"Git worktree must be clean before lease activation (changes outside allowed_paths: {shown})")
+    inherited = dirty
+    if inherited and not args.inherit_dirty:
+        fail("Git worktree must be clean before lease activation; changes already inside allowed_paths need --inherit-dirty: " + ", ".join(ascii(path) for path in inherited[:5]))
+    if len(inherited) > 50:
+        fail("too many inherited paths (limit 50)")
+    inherited_hashes = {
+        path: (sha256(ROOT / path) if (ROOT / path).is_file() else "ABSENT") for path in inherited
+    }
     require_git_tracked(task, "task contract")
     require_git_tracked(review, "ready-review receipt")
     if meta["approval_mode"] == "ssh-signature":
@@ -183,6 +207,29 @@ def main() -> None:
         allowed_signers, _ = inside_project(str(review_meta["allowed_signers_file"]), "allowed signers file")
         require_git_tracked(signature, "approval signature")
         require_git_tracked(allowed_signers, "allowed signers file")
+
+    existing_lease = ROOT / ".ai-governance" / "implementation-lease.json"
+    existing_bytes: bytes | None = None
+    existing_state = ""
+    existing_task = ""
+    if existing_lease.exists():
+        try:
+            existing_bytes = existing_lease.read_bytes()
+            existing = json.loads(existing_bytes.decode("utf-8"))
+            existing_state = existing.get("state")
+            if not isinstance(existing_state, str):
+                raise ValueError("state is not a string")
+            existing_task = re.sub(r"[^A-Za-z0-9._-]", "_", str(existing.get("task_id")))[:80]
+            if existing_state == "ACTIVE":
+                existing_expires = datetime.fromisoformat(str(existing.get("expires_at", "")).replace("Z", "+00:00"))
+                if existing_expires.tzinfo is None:
+                    raise ValueError("naive expiry")
+        except (OSError, ValueError, AttributeError):
+            fail("an unreadable implementation lease exists; run scripts/deactivate_lease.py first")
+        if existing_state not in {"ACTIVE", "SEALED"}:
+            fail(f"an implementation lease in an unknown state exists ({existing_state!r}); run scripts/deactivate_lease.py first")
+        if existing_state == "ACTIVE" and existing_expires > datetime.now(timezone.utc):
+            fail(f"an unexpired ACTIVE lease exists for {existing_task}; seal or deactivate it first")
 
     print("\nIMPLEMENTATION LEASE REVIEW")
     print(f"Task:       {meta['task_id']}")
@@ -200,6 +247,10 @@ def main() -> None:
     print("Allowed commands:")
     for item in meta["allowed_commands"] or ["<none; non-read-only commands will ask>"]:
         print(f"  - {item}")
+    if inherited:
+        print(f"Changes already in allowed paths ({len(inherited)}; will be part of the sealed diff):")
+        for item in inherited:
+            print(f"  - {ascii(item)}")
 
     if input("\nType the exact task ID: ").strip() != meta["task_id"]:
         fail("task ID confirmation failed")
@@ -207,6 +258,12 @@ def main() -> None:
         fail("activation phrase not confirmed")
 
     now = datetime.now(timezone.utc)
+    if existing_bytes is not None:
+        archive_dir = ROOT / ".ai-governance" / "implementation-seals"
+        archive_dir.mkdir(parents=True, exist_ok=True)
+        archive = archive_dir / f"PRIOR-{existing_task}-{existing_state}-{now.strftime('%Y%m%dT%H%M%S%fZ')}.json"
+        with archive.open("xb") as archive_handle:
+            archive_handle.write(existing_bytes)
     lease = {
         "schema": 3,
         "state": "ACTIVE",
@@ -222,6 +279,7 @@ def main() -> None:
         "allowed_paths": meta["allowed_paths"],
         "allowed_commands": meta["allowed_commands"],
         "approval_mode": meta["approval_mode"],
+        "inherited_paths": inherited_hashes,
         **repository,
     }
     destination = ROOT / ".ai-governance" / "implementation-lease.json"

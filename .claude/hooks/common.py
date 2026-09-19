@@ -177,6 +177,33 @@ def git_worktree_clean(root: Path) -> tuple[bool, str]:
     return True, "Git worktree is clean"
 
 
+def git_dirty_paths(root: Path) -> tuple[list[str] | None, str]:
+    """Return every path that differs from HEAD, including untracked files."""
+    try:
+        status = subprocess.run(
+            ["git", "status", "--porcelain=v1", "-z", "--untracked-files=all"],
+            cwd=root, text=True, encoding="utf-8", errors="replace",
+            capture_output=True, check=False, timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None, "Git worktree status could not be verified"
+    if status.returncode != 0:
+        return None, "Git worktree status could not be verified"
+    entries = status.stdout.split("\0")
+    paths: list[str] = []
+    index = 0
+    while index < len(entries):
+        entry = entries[index]
+        index += 1
+        if len(entry) < 4:
+            continue
+        paths.append(entry[3:])
+        if ("R" in entry[:2] or "C" in entry[:2]) and index < len(entries):
+            paths.append(entries[index])
+            index += 1
+    return paths, "Git worktree status read"
+
+
 def load_lease(root: Path) -> tuple[dict[str, Any] | None, str]:
     lease_path = root / ".ai-governance" / "implementation-lease.json"
     if not lease_path.is_file():
