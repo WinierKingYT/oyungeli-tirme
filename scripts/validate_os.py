@@ -310,6 +310,15 @@ def validate_hooks(v: Validation) -> None:
 
         v.check(write(root / "Source/Game/X.cpp", "Edit") == "allow", "active lease should allow in-scope write")
         v.check(write(root / "Source/Other.cpp", "Edit") == "deny", "active lease must deny out-of-scope write")
+        shifted_cwd = {**base, "cwd": str(root / "Source"), "tool_name": "Edit"}
+        v.check(
+            decision(hook_call(write_hook, root, {**shifted_cwd, "tool_input": {"file_path": str(root / "Source/Game/X.cpp")}})) == "allow",
+            "a lease write must be judged from the project root even when the working directory is shifted",
+        )
+        v.check(
+            decision(hook_call(write_hook, root, {**shifted_cwd, "tool_input": {"file_path": str(root / "Source/Source/Game/Y.cpp")}})) == "deny",
+            "a shifted working directory must not let an out-of-scope path pass as in-scope",
+        )
         v.check(shell("echo test") == "allow", "simple pre-approved command should be allowed")
         v.check(shell("echo test > Source/Game/X.cpp") == "ask", "redirected approved command must ask")
         v.check(shell("echo test && rm -rf build") == "deny", "approved prefix must not bypass destructive suffix")
@@ -338,6 +347,215 @@ def validate_hooks(v: Validation) -> None:
                 v.check(bool(entries) and all("decision" in item and "tool" in item for item in entries), "audit log entries must be valid JSONL")
             except Exception as exc:
                 v.check(False, f"audit log invalid: {exc}")
+
+
+def valid_owner_policy(git_path: str) -> dict:
+    return {
+        "schema": 1,
+        "policy_id": "OWNER-POLICY-TEST",
+        "issued_at": "2026-01-01T00:00:00Z",
+        "expires_at": None,
+        "max_lease_hours": 8,
+        "required_branch": "agent/work",
+        "base_branch": "main",
+        "effective_rigor_cap": "R1",
+        "git_executable": git_path,
+        "max_changed_paths": 40,
+        "max_total_bytes": 2000000,
+        "max_leases_per_day": 12,
+        "max_unmerged_commits": 20,
+        "max_unmerged_paths": 200,
+        "allowed_commands": [],
+        "reviewer_ids": ["independent-reviewer"],
+        "deny_paths": ["scripts/**"],
+        "lanes": [
+            {"name": "prototype", "allowed_paths": ["Assets/_Prototype/**"], "max_rigor": "R1", "extensions": [".cs"]}
+        ],
+    }
+
+
+def validate_owner_policy_mode(v: Validation) -> None:
+    import common
+    from unittest import mock
+
+    git_path = shutil.which("git")
+    if not git_path:
+        v.check(False, "git must be available for the owner-policy tests")
+        return
+    git_path = str(Path(git_path).resolve())
+    write_hook = HOOKS / "govern_write.py"
+    shell_hook = HOOKS / "govern_shell.py"
+    mcp_hook = HOOKS / "govern_mcp.py"
+    with tempfile.TemporaryDirectory(prefix="aigdo-policy-") as temp:
+        root = Path(temp)
+        (root / ".ai-governance").mkdir()
+        (root / ".ai-governance" / "mcp-policy.json").write_text(
+            json.dumps({"schema": 1, "allow_without_lease": [], "allow_with_lease": []}),
+            encoding="utf-8",
+        )
+        drafts = root / "docs" / "05-production" / "tasks"
+        drafts.mkdir(parents=True)
+        for git_args in (
+            ["init", "-q"],
+            ["config", "user.email", "validator@example.invalid"],
+            ["config", "user.name", "AIGDO Validator"],
+        ):
+            subprocess.run([git_path, *git_args], cwd=root, check=True)
+        (drafts / "TASK-TRACKED-001.md").write_text("tracked\n", encoding="utf-8")
+        (drafts / "TASK-DELETED-001.md").write_text("deleted\n", encoding="utf-8")
+        subprocess.run([git_path, "add", "--", "docs"], cwd=root, check=True)
+        subprocess.run([git_path, "commit", "-qm", "tracked drafts"], cwd=root, check=True)
+        (drafts / "TASK-DELETED-001.md").unlink()
+        (drafts / "TASK-UNTRACKED-001.md").write_text("untracked draft\n", encoding="utf-8")
+        base = {"hook_event_name": "PreToolUse", "cwd": str(root)}
+        policy_file = root / ".ai-governance" / "owner-policy.json"
+
+        def write(path: Path, cwd: Path | None = None) -> str:
+            payload = {**base, "cwd": str(cwd or root), "tool_name": "Write", "tool_input": {"file_path": str(path)}}
+            return decision(hook_call(write_hook, root, payload))
+
+        def shell(command: str) -> str:
+            return decision(hook_call(shell_hook, root, {**base, "tool_name": "Bash", "tool_input": {"command": command}}))
+
+        def mcp(name: str) -> str:
+            return decision(hook_call(mcp_hook, root, {**base, "tool_name": name, "tool_input": {"query": "x"}}))
+
+        def set_policy(policy: dict) -> None:
+            policy_file.write_text(json.dumps(policy), encoding="utf-8")
+
+        def good_policy(**changes: object) -> dict:
+            return {**valid_owner_policy(git_path), **changes}
+
+        activate = "python scripts/activate_lease.py docs/05-production/tasks/TASK-PROTO-001.md --owner-policy"
+        task_docs = "python scripts/agent_commit.py --task-docs"
+        seal = "python scripts/seal_implementation.py"
+        commit = "python scripts/agent_commit.py"
+        shifted_target = root / ".ai-governance" / "docs" / "05-production" / "tasks" / "TASK-X.md"
+
+        v.check(shell(activate) == "deny", "owner-policy activation form must be denied without a policy")
+        v.check(shell(task_docs) == "deny", "task-document commit form must be denied without a policy")
+        v.check(write(drafts / "TASK-PROTO-001.md") == "ask", "task drafting must still ask without a policy")
+        v.check(
+            write(shifted_target, cwd=root / ".ai-governance") == "deny",
+            "a write to a controlled path must be denied even when the working directory is shifted",
+        )
+
+        set_policy(good_policy())
+        v.check(shell(activate) == "allow", "exact owner-policy activation form must be allowed with a policy")
+        v.check(shell(activate + " --hours 2") == "allow", "activation with --hours must be allowed with a policy")
+        v.check(shell(task_docs) == "allow", "task-document commit form must be allowed with a policy")
+        v.check(shell(seal) == "deny", "sealing needs an owner-policy lease")
+        v.check(shell(commit) == "deny", "a lane commit needs a sealed owner-policy lease")
+        v.check(shell("git commit -m x") == "deny", "plain git commit must stay denied in policy mode")
+        variants = [
+            activate + " --inherit-dirty",
+            activate + " ",
+            " " + activate,
+            activate + "\n",
+            activate + " && echo x",
+            "X=1 " + activate,
+            activate.replace("python ", "python3 "),
+            activate.replace("scripts/", "./scripts/"),
+            activate.replace("TASK-PROTO-001", "TASK-..-001"),
+            activate.replace("python", "pythоn"),
+            task_docs + " --x",
+            task_docs.upper(),
+            "python  scripts/agent_commit.py --task-docs",
+            "python scripts/owner_policy.py",
+            "cat scripts/agent_commit.py",
+        ]
+        for variant in variants:
+            v.check(shell(variant) == "deny", f"owner-policy command variant must be denied: {variant!r}")
+
+        def action(command: str, lease: dict | None) -> str | None:
+            with mock.patch.object(common, "load_lease", return_value=(lease, "stub")):
+                return common.owner_policy_command(root, command)
+
+        owned = {"authority": "owner-policy"}
+        v.check(action(seal, None) is None, "seal form needs a lease")
+        v.check(action(seal, {**owned, "state": "ACTIVE"}) == "seal", "seal form is allowed for an active owner-policy lease")
+        v.check(action(seal, {**owned, "state": "SEALED"}) is None, "seal form is refused for a sealed lease")
+        v.check(action(commit, {**owned, "state": "SEALED"}) == "commit", "commit form is allowed for a sealed owner-policy lease")
+        v.check(action(commit, {**owned, "state": "ACTIVE"}) is None, "commit form is refused for an unsealed lease")
+        v.check(action(seal, {"authority": "human", "state": "ACTIVE"}) is None, "seal form is refused for a human-authority lease")
+        v.check(action(seal, {"state": "ACTIVE"}) is None, "seal form is refused when the lease has no authority")
+        v.check(action(commit, {**owned, "state": ["SEALED"]}) is None, "a non-string lease state must be refused")
+        stub_lease = {
+            "schema": 3, "state": ["ACTIVE"], "task_id": "T", "task_contract": "x", "task_sha256": "x",
+            "ready_review_receipt": "x", "ready_review_sha256": "x", "expires_at": "2099-01-01T00:00:00Z",
+            "allowed_paths": ["a"], "allowed_commands": [], "git_root": "x", "git_head": "x", "git_branch": "x",
+        }
+        lease_file = root / ".ai-governance" / "implementation-lease.json"
+        lease_file.write_text(json.dumps(stub_lease), encoding="utf-8")
+        v.check(common.load_lease(root, allow_sealed=True)[0] is None, "load_lease must refuse a non-string state")
+        lease_file.unlink()
+
+        v.check(write(root / "docs/note.md") == "deny", "other documentation writes must be denied in policy mode")
+        v.check(mcp("mcp__filesystem__write_file") == "deny", "MCP tools must be denied in policy mode")
+        for name in ("TASK-PROTO-001.md", "READY-TASK-PROTO-001.md", "TASK-UNTRACKED-001.md"):
+            v.check(write(drafts / name) == "allow", f"drafting a new or untracked task file must be allowed: {name}")
+        for name in ("TASK-TRACKED-001.md", "TASK-DELETED-001.md"):
+            v.check(write(drafts / name) == "deny", f"rewriting a tracked task file must be denied: {name}")
+        rel = "docs/05-production/tasks/"
+        v.check(common.path_is_untracked(root, rel + "TASK-NEW-001.md", git_path), "a new path counts as untracked")
+        v.check(common.path_is_untracked(root, rel + "TASK-UNTRACKED-001.md", git_path), "an untracked draft counts as untracked")
+        v.check(not common.path_is_untracked(root, rel + "TASK-TRACKED-001.md", git_path), "a tracked file is not untracked")
+        v.check(not common.path_is_untracked(root, rel + "TASK-DELETED-001.md", git_path), "a deleted tracked file is not untracked")
+        for name in ("ACCEPT-TASK-PROTO-001.md", "task-proto-001.md", "TASK-PROTO-001.txt", "sub/TASK-PROTO-001.md"):
+            v.check(write(drafts / name) == "deny", f"other task-directory writes must be denied in policy mode: {name}")
+        v.check(write(root / "docs/07-evidence/ACCEPT-TASK-PROTO-001.md") == "deny", "agents must not write acceptance receipts")
+        v.check(write(root / ".ai-governance/owner-policy.json") == "deny", "the policy file must stay a controlled path")
+        v.check(
+            write(shifted_target, cwd=root / ".ai-governance") == "deny",
+            "a shifted working directory must not turn a controlled path into an allowed draft",
+        )
+
+        def lane(paths: list[str]) -> dict:
+            return {"name": "x", "allowed_paths": paths, "max_rigor": "R1", "extensions": [".cs"]}
+
+        bad_policies = {
+            "expired": good_policy(expires_at="2000-01-01T00:00:00Z"),
+            "missing expiry": {k: val for k, val in good_policy().items() if k != "expires_at"},
+            "placeholder reviewer": good_policy(reviewer_ids=["<independent reviewer id>"]),
+            "relative git": good_policy(git_executable="git"),
+            "missing git": good_policy(git_executable=str(root / "nowhere" / "git.exe")),
+            "not git": good_policy(git_executable=str(Path(sys.executable).resolve())),
+            "wrong schema": good_policy(schema=2),
+            "boolean schema": good_policy(schema=True),
+            "wrong branch": good_policy(required_branch="main"),
+            "empty deny": good_policy(deny_paths=[]),
+            "no lanes": good_policy(lanes=[]),
+            "wildcard lane": good_policy(lanes=[lane(["**"])]),
+            "star lane": good_policy(lanes=[lane(["Assets/*"])]),
+            "glob lane": good_policy(lanes=[lane(["**/*.cs"])]),
+            "claude lane": good_policy(lanes=[lane([".claude/**"])]),
+            "dotless controlled lane": good_policy(lanes=[lane(["claude/hooks/**"])]),
+            "dot-slash lane": good_policy(lanes=[lane(["./.claude/hooks/**"])]),
+            "scripts lane": good_policy(lanes=[lane(["scripts/**"])]),
+            "git lane": good_policy(lanes=[lane([".git/**"])]),
+            "gitignore lane": good_policy(lanes=[lane([".gitignore"])]),
+            "traversal lane": good_policy(lanes=[lane(["Assets/../scripts/x.py"])]),
+            "trailing dot lane": good_policy(lanes=[lane(["Assets/Game."])]),
+            "double slash lane": good_policy(lanes=[lane(["Assets//Game/**"])]),
+        }
+        for label, bad in bad_policies.items():
+            set_policy(bad)
+            v.check(shell(activate) == "deny", f"an invalid policy ({label}) must not authorize activation")
+            v.check(write(root / "docs/note.md") == "ask", f"an invalid policy ({label}) must not enable policy mode")
+
+        set_policy(good_policy(lanes=[lane([".claude/rules/unity.md", "Assets/Game/**", "Assets/Game.meta"])]))
+        v.check(shell(activate) == "allow", "a narrow engine-rules and game lane policy must be valid")
+        set_policy(good_policy())
+        v.check(shell(activate) == "allow", "restored policy must authorize activation")
+        policy_file.unlink()
+        v.check(shell(activate) == "deny", "deleting the policy must revoke authority")
+
+        audit = [
+            json.loads(line)
+            for line in (root / ".ai-governance" / "audit.log").read_text(encoding="utf-8").splitlines()
+        ]
+        v.check(bool(audit) and audit[0].get("policy_sha256") is None, "audit entries without a policy must record no policy hash")
+        v.check(any(entry.get("policy_sha256") for entry in audit), "audit entries in policy mode must record the policy hash")
 
 
 def validate_repository_attestation(v: Validation) -> None:
@@ -643,6 +861,7 @@ def main() -> None:
     validate_settings(v)
     validate_frontmatter(v)
     validate_hooks(v)
+    validate_owner_policy_mode(v)
     validate_repository_attestation(v)
     validate_ssh_approval(v)
     print(f"Checks: {v.checks}")

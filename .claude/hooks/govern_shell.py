@@ -9,7 +9,7 @@ import re
 import shlex
 from pathlib import PurePath
 
-from common import emit_decision, load_lease, project_root, read_hook_input, run_fail_closed
+from common import emit_decision, load_lease, owner_policy_command, project_root, read_hook_input, run_fail_closed
 
 
 CONTROL_OPERATORS = ("\n", "\r", "&&", "||", "|&", "|", ";", ">", "<", "`", "$(", "&")
@@ -23,6 +23,9 @@ SAFE_SIMPLE_PROGRAMS = {
 }
 SAFE_GIT_SUBCOMMANDS = {"status", "diff", "log", "show", "rev-parse", "ls-files"}
 UNSAFE_GIT_OPTIONS = {"--output", "--ext-diff", "--textconv", "--exec-path"}
+LEASE_SCRIPTS = (
+    "activate_lease.py", "deactivate_lease.py", "seal_implementation.py", "agent_commit.py", "owner_policy.py",
+)
 SENSITIVE_REFERENCE = re.compile(
     r"(?:^|[/\\\s])(?:\.env(?:\.|$)|secrets?(?:[/\\]|$)|[^\s/\\]+\.(?:pem|key)(?:\s|$)|id_rsa(?:\s|$))",
     re.IGNORECASE,
@@ -89,7 +92,7 @@ def forbidden(command: str, tokens: list[str]) -> str | None:
         return "Publish/deploy command is forbidden anywhere in a compound command"
     if ".ai-governance/" in lowered or ".claude/hooks/" in lowered or ".claude/settings.json" in lowered:
         return "Governance control-plane access is forbidden"
-    if any(name in lowered for name in ("activate_lease.py", "deactivate_lease.py", "seal_implementation.py")):
+    if any(name in lowered for name in LEASE_SCRIPTS):
         return "Agents cannot activate, deactivate, or seal implementation authority"
 
     stripped = strip_env_prefix(tokens)
@@ -102,7 +105,7 @@ def forbidden(command: str, tokens: list[str]) -> str | None:
         return "Destructive filesystem command is forbidden"
     if program in {"python", "python3", "python.exe", "py", "node", "node.exe"}:
         joined = " ".join(stripped[1:]).lower()
-        if any(name in joined for name in ("activate_lease.py", "deactivate_lease.py", "seal_implementation.py")):
+        if any(name in joined for name in LEASE_SCRIPTS):
             return "Agents cannot invoke lease-control scripts"
 
     subcommand, arguments = git_subcommand(tokens)
@@ -175,6 +178,10 @@ def main() -> None:
     command = data.get("tool_input", {}).get("command")
     if not isinstance(command, str) or not command.strip():
         emit_decision(data, "deny", "Shell command is missing; fail closed")
+        return
+    action = owner_policy_command(project_root(), command)
+    if action:
+        emit_decision(data, "allow", f"Exact owner-policy command form is authorized: {action}")
         return
     normalized = command.strip()
     tokens = split_command(normalized)

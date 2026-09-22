@@ -6,7 +6,10 @@ from __future__ import annotations
 from common import (
     ALWAYS_DOCUMENTATION_PATHS,
     CONTROLLED_PATHS,
+    TASK_DOCUMENT_WRITE,
     load_lease,
+    load_owner_policy,
+    path_is_untracked,
     matches_any,
     project_root,
     read_hook_input,
@@ -34,12 +37,31 @@ def main() -> None:
         emit_decision(data, "deny", f"Governance-controlled path cannot be modified by an agent: {relative}")
         return
 
-    lease, lease_reason = load_lease(project_root())
-    if lease and matches_any(relative, lease["allowed_paths"]):
-        emit_decision(data, "allow", f"Path is inside active task {lease['task_id']}: {relative}")
+    root_relative = relative_target(target, project_root())
+    if root_relative is None:
+        emit_decision(data, "deny", "Writes outside the project root are not allowed")
+        return
+    if matches_any(root_relative, CONTROLLED_PATHS) or matches_any(
+        root_relative.casefold(), tuple(item.casefold() for item in CONTROLLED_PATHS)
+    ):
+        emit_decision(data, "deny", f"Governance-controlled path cannot be modified by an agent: {root_relative}")
         return
 
-    if matches_any(relative, ALWAYS_DOCUMENTATION_PATHS):
+    lease, lease_reason = load_lease(project_root())
+    if lease and matches_any(root_relative, lease["allowed_paths"]):
+        emit_decision(data, "allow", f"Path is inside active task {lease['task_id']}: {root_relative}")
+        return
+
+    policy = load_owner_policy(project_root())[0]
+    if (
+        policy is not None
+        and TASK_DOCUMENT_WRITE.fullmatch(root_relative)
+        and path_is_untracked(project_root(), root_relative, policy["git_executable"])
+    ):
+        emit_decision(data, "allow", f"Owner-policy mode allows drafting a task contract or receipt: {root_relative}")
+        return
+
+    if matches_any(root_relative, ALWAYS_DOCUMENTATION_PATHS):
         emit_decision(
             data,
             "ask",

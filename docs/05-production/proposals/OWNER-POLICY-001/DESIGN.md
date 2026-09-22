@@ -16,7 +16,44 @@ The owner should not need a terminal for routine lease activation, sealing, or c
 | Policy lifetime | Indefinite (explicit `"expires_at": null`) | Against the reviewer's advice |
 | Agent commits | Only to one standing `agent/work` branch in a separate worktree; the owner merges | Push is never automated |
 
-## Mandatory separate worktree
+## Owner change of 2026-09-20 (revision 6, binding requirements from a security review)
+
+The owner asked that commits and pushes happen automatically after each completed task, to `main`, without asking, and accepted the loss of the review gate. This replaces the `agent/work` branch and the separate worktree below (kept as the recommendation the owner declined); the agent works in the owner's main working tree. The independent review returned `FIX_FIRST` on the first wording ("run `git push origin main`") and produced the requirements below, which are binding for the patches. Patch A is applied and its validator currently requires an `agent/` branch, so the policy relaxation is part of Patch B.
+
+**Patch split.** Patch B delivers commit without the owner's terminal (lease, seal, commit to `main`). Patch C adds the push, because a push trusts configuration and publishes history and needs its own review and tests. Until Patch C exists the owner pushes.
+
+**Binding requirements**
+
+- **F1: push-range guard.** A push publishes every unpushed commit, including the owner's private local ones. The script pushes only when every commit in `T..HEAD` is a script commit (has a ledger entry), and the diff `T..HEAD` stays inside lanes plus the task-document regexes and passes the secret scan; `T` is the remote tip from step 6 below. The count must not exceed `max_unpushed_commits`.
+- **F2: no trust in `.git/config`.** Add `.git/**` to `CONTROLLED_PATHS`. The script runs git only as `policy.git_executable` with an environment built from scratch (only `SYSTEMROOT`, `USERPROFILE`, `HOME`, `APPDATA`, `LOCALAPPDATA`, `TEMP`, `TMP`, `SSH_AUTH_SOCK`, a fixed `PATH`; `GIT_TERMINAL_PROMPT=0`; no other `GIT_*`). It refuses when `git config --local --list -z` holds any key outside an allowlist (safe `core.*`, `remote.origin.url`/`fetch`, `branch.*`, `user.*`), or when `remote get-url` and `get-url --push` differ from `policy.remote_url`. The push targets the pinned URL, not the name `origin`, and uses `-c protocol.allow=never -c protocol.https.allow=always -c http.proxy= -c core.askPass=`.
+- **F3: retryable commit state.** A commit moves HEAD, so `load_lease` would reject the lease. The script writes `pending-push.json` (commit sha, lease id, policy and seal hashes, attempts) before pushing; rerunning the same exact form with that file present means "retry the push only" after re-verifying HEAD equals the recorded sha; attempts are capped; only the owner clears a stuck state with `owner_policy.py resolve-push`. The Patch A hook gate must admit the commit form when a valid `pending-push.json` exists. The file blocks new activations and new commits until resolved.
+- **F4: exfiltration through lane files.** Read denies are project-relative today, so an agent could read `~/.ssh`, `~/.aws` and similar and write the text into a lane file that is then published. Patch B adds Read denies for the home-directory secret stores, and the content secret scan runs at seal, at commit, and over the whole push range.
+- **F5: LFS.** `--no-verify` skips the LFS pre-push upload, so pointers would land without their objects; refuse any path whose `git check-attr filter` is not `unspecified`.
+- **F6: minimal policy relaxation.** `required_branch == "main"` is valid only together with `commit_to_default_branch` (a strict `true`), `base_branch == "main"`, `remote_name == "origin"`, `remote_url` matching `^https://[A-Za-z0-9.-]+/[\w./-]+$` (no credentials, no `..`), and a positive integer `max_unpushed_commits`; otherwise the `agent/` rule stays.
+- **F7:** `--task-docs` commits only and never pushes; its commits count toward `max_unpushed_commits` and are pushed by the next lane commit under the F1 guard.
+
+**`agent_commit.py` lane commit, in order.**
+1. Load the policy and check F6 fields; build the scrubbed environment.
+2. The lease is `SEALED` with `authority: owner-policy`, the policy hash matches, the seal digest is recomputed through one shared helper and matches, the seal age is within `max_lease_hours`, and the seal base equals HEAD.
+3. Branch is `main`; no merge, rebase, cherry-pick, or `index.lock`; the index is empty.
+4. `git status --porcelain=v1 -z --untracked-files=all --ignored=matching` equals the sealed `changed_paths` exactly, with no ignored file inside a lane.
+5. Config allowlist and remote URL checks (F2).
+6. (Patch C) `git ls-remote <remote_url> refs/heads/main` gives the tip `T`, validated as a hex object id and required to exist locally and be an ancestor of HEAD; no fetch, no remote object ingested; the server's fast-forward rule is the last guard.
+7. Secret and LFS guards (F4, F5). Paths: any segment matching `.env*`, `*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.jks`, `*.keystore`, `*.ppk`, `id_rsa*`, `id_ed25519*`, `*secret*`, `credentials*`, `.netrc`, `.npmrc`, `.pypirc`, `.git-credentials`, `*.tfstate`, `*.tfvars`, `google-services.json`. Content, on added lines only: private-key headers, `AKIA|ASIA` keys, GitHub and Slack tokens, Google API keys, `sk-` keys, JWT shapes, credentials in URLs, and `password|secret|api_key|token` assignments; entropy checks only in `.cs`, `.json`, `.txt`, `.md` (Unity YAML holds long hex).
+8. Stage with `--literal-pathspecs add --pathspec-from-file=- --pathspec-file-nul` plus one new ledger file, with `-c core.hooksPath=<empty> -c core.fsmonitor=false`; every staged mode must be `100644`; the staged set equals the sealed set plus the ledger.
+9. (Patch C) The push-range guard (F1).
+10. Commit with `--no-verify --message=<subject>`; verify one parent equal to the lease base and that `diff-tree` equals the staged set.
+11. (Patch C) Write `pending-push.json`.
+12. (Patch C) Push by commit id, never a ref name, non-force: `git -c protocol.allow=never -c protocol.https.allow=always -c http.proxy= -c core.askPass= push --porcelain --no-verify --no-follow-tags --recurse-submodules=no <remote_url> <sha>:refs/heads/main`.
+13. (Patch C) Confirm with `ls-remote` that `main` equals the sha; delete `pending-push.json`; mark the lease `COMMITTED`.
+
+**What the owner may not expect** (accepted, recorded): owner edits inside lanes during an active lease get sealed and committed; Unity open in the tree makes `.meta` files dirty and every commit is then refused; the push uses the owner's stored credential at its full scope (a fine-grained token limited to this repository is the only bound); if the repository is public, a leak is public at once and `git revert` does not remove it (rotate the secret); the ledger is the only owner-visible signal of unattended pushes.
+
+**Still human-only:** changing the policy, hooks, `settings.json`, tags, and any force or history-changing operation.
+
+**Size and review order.** About 1,300 to 1,600 lines across both patches, `agent_commit.py` about 500 of them. Review hardest: the environment and config allowlist, the refspec construction, the push-range guard, the `pending-push` state machine, and the hook gate change.
+
+## Mandatory separate worktree (superseded by the 2026-09-20 change; kept as the recommendation)
 
 The agent works in its own `git worktree` on the `agent/work` branch, never in the owner's main working tree. This does most of the risk reduction: the owner's Unity project and rule files are untouched until the owner merges, so Unity code that could run when the owner presses Play, and rule files that persist into later sessions, become a reviewed merge gate.
 

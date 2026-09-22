@@ -6,6 +6,7 @@ import fnmatch
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -24,6 +25,8 @@ CONTROLLED_PATHS = (
     "scripts/doctor.py",
     "scripts/task_digest.py",
     "scripts/artifact_digest.py",
+    "scripts/owner_policy.py",
+    "scripts/agent_commit.py",
     "scripts/validate_os.py",
     "tests/governance_attack_corpus.json",
     ".github/workflows/aigdo-validation.yml",
@@ -60,6 +63,10 @@ def emit_decision(
 ) -> None:
     """Audit and emit one schema-valid PreToolUse decision."""
     root = project_root()
+    policy, _ = load_owner_policy(root)
+    if decision == "ask" and policy is not None:
+        decision = "deny"
+        reason = f"{reason} (owner-policy mode: no human is available to answer a prompt)"
     lease, _ = load_lease(root)
     audit_dir = root / ".ai-governance"
     audit_dir.mkdir(parents=True, exist_ok=True)
@@ -77,6 +84,7 @@ def emit_decision(
         "decision": decision,
         "reason": reason[:1000],
         "task_id": lease.get("task_id") if lease else None,
+        "policy_sha256": policy["policy_sha256"] if policy else None,
     }
     with (audit_dir / "audit.log").open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(event, ensure_ascii=False) + "\n")
@@ -177,6 +185,168 @@ def git_worktree_clean(root: Path) -> tuple[bool, str]:
     return True, "Git worktree is clean"
 
 
+POLICY_FILE = ".ai-governance/owner-policy.json"
+RIGOR_LEVELS = ("R0", "R1", "R2", "R3", "R4")
+TASK_DOCUMENT_WRITE = re.compile(r"docs/05-production/tasks/(?:TASK|READY-TASK)-[A-Z0-9._-]+\.md")
+OWNER_POLICY_COMMANDS = (
+    (
+        "activate",
+        re.compile(
+            r"python scripts/activate_lease\.py docs/05-production/tasks/(?!.*\.\.)[A-Z0-9][A-Z0-9._-]{2,80}\.md"
+            r" --owner-policy( --hours [0-9]{1,2}(\.[0-9])?)?"
+        ),
+    ),
+    ("seal", re.compile(r"python scripts/seal_implementation\.py")),
+    ("commit", re.compile(r"python scripts/agent_commit\.py")),
+    ("task-docs", re.compile(r"python scripts/agent_commit\.py --task-docs")),
+)
+
+
+def _is_int(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 1
+
+
+def _is_str_list(value: Any) -> bool:
+    return isinstance(value, list) and all(isinstance(item, str) and item for item in value)
+
+
+def _normalize(value: str) -> str:
+    return value.replace("\\", "/").lstrip("./")
+
+
+def _lane_path_problem(path: str) -> str | None:
+    literal = path[:-3] if path.endswith("/**") else path
+    segments = literal.split("/")
+    if (
+        not literal
+        or any(char in literal for char in "*?[]\\:")
+        or literal.startswith(("/", "~"))
+        or any(part in {"", ".", ".."} or part.endswith((".", " ")) for part in segments)
+        or any(part.lstrip(".").casefold().startswith("git") for part in segments)
+    ):
+        return f"Owner policy lane path is unsafe: {path}"
+    folded = _normalize(literal).casefold().rstrip("/")
+    for controlled in CONTROLLED_PATHS:
+        prefix = _normalize(controlled).casefold().rstrip("*").rstrip("/")
+        if prefix.startswith(folded) or folded.startswith(prefix):
+            return f"Owner policy lane path overlaps controlled governance files: {path}"
+    return None
+
+
+def _policy_problem(policy: Any) -> str | None:
+    if not isinstance(policy, dict) or type(policy.get("schema")) is not int or policy["schema"] != 1:
+        return "Owner policy schema is invalid"
+    if "expires_at" not in policy:
+        return "Owner policy must state expires_at (null means indefinite)"
+    if policy["expires_at"] is not None:
+        try:
+            expires = datetime.fromisoformat(str(policy["expires_at"]).replace("Z", "+00:00"))
+        except ValueError:
+            return "Owner policy expiry is invalid"
+        if expires.tzinfo is None or expires <= datetime.now(timezone.utc):
+            return "Owner policy has expired"
+    for key in ("policy_id", "required_branch", "base_branch"):
+        if not isinstance(policy.get(key), str) or not policy[key]:
+            return f"Owner policy field {key} is invalid"
+    if not policy["required_branch"].startswith("agent/"):
+        return "Owner policy required_branch must start with agent/"
+    git_executable = policy.get("git_executable")
+    if not isinstance(git_executable, str) or "<" in git_executable:
+        return "Owner policy git_executable is invalid"
+    git_path = Path(git_executable)
+    if not git_path.is_absolute() or not git_path.is_file() or git_path.name.casefold() not in {"git", "git.exe"}:
+        return "Owner policy git_executable must be an absolute path to an existing git executable"
+    if policy.get("effective_rigor_cap") not in RIGOR_LEVELS:
+        return "Owner policy effective_rigor_cap is invalid"
+    hours = policy.get("max_lease_hours")
+    if isinstance(hours, bool) or not isinstance(hours, (int, float)) or not 0 < hours <= 24:
+        return "Owner policy max_lease_hours is invalid"
+    for key in ("max_changed_paths", "max_total_bytes", "max_leases_per_day", "max_unmerged_commits", "max_unmerged_paths"):
+        if not _is_int(policy.get(key)):
+            return f"Owner policy field {key} is invalid"
+    if not _is_str_list(policy.get("allowed_commands")):
+        return "Owner policy field allowed_commands is invalid"
+    if not _is_str_list(policy.get("deny_paths")) or not policy["deny_paths"]:
+        return "Owner policy deny_paths must be a non-empty list"
+    reviewers = policy.get("reviewer_ids")
+    if not _is_str_list(reviewers) or not reviewers or any("<" in item for item in reviewers):
+        return "Owner policy reviewer_ids must be a non-empty list without placeholders"
+    lanes = policy.get("lanes")
+    if not isinstance(lanes, list) or not lanes:
+        return "Owner policy has no lanes"
+    for lane in lanes:
+        if (
+            not isinstance(lane, dict)
+            or not isinstance(lane.get("name"), str)
+            or not lane["name"]
+            or not _is_str_list(lane.get("allowed_paths"))
+            or not lane["allowed_paths"]
+            or lane.get("max_rigor") not in RIGOR_LEVELS
+            or not _is_str_list(lane.get("extensions"))
+        ):
+            return "Owner policy lane is invalid"
+        for path in lane["allowed_paths"]:
+            problem = _lane_path_problem(path)
+            if problem:
+                return problem
+    return None
+
+
+def load_owner_policy(root: Path) -> tuple[dict[str, Any] | None, str]:
+    """Return the owner policy when the file exists and passes every structural check."""
+    policy_path = root / POLICY_FILE
+    if not policy_path.is_file():
+        return None, "No owner policy"
+    try:
+        policy = json.loads(policy_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None, "Owner policy is unreadable"
+    problem = _policy_problem(policy)
+    if problem:
+        return None, problem
+    policy["policy_sha256"] = file_sha256(policy_path)
+    return policy, "Owner policy is valid"
+
+
+def owner_policy_command(root: Path, command: str) -> str | None:
+    """Return the action name when the raw command is an exact owner-policy form the policy allows."""
+    if not (command.isascii() and command.isprintable()):
+        return None
+    policy, _ = load_owner_policy(root)
+    if policy is None:
+        return None
+    action = next((name for name, pattern in OWNER_POLICY_COMMANDS if pattern.fullmatch(command)), None)
+    if action in {"activate", "task-docs"}:
+        return action
+    if action not in {"seal", "commit"}:
+        return None
+    lease, _ = load_lease(root, allow_sealed=True)
+    if not lease or lease.get("authority") != "owner-policy":
+        return None
+    if (action == "seal" and lease["state"] == "ACTIVE") or (action == "commit" and lease["state"] == "SEALED"):
+        return action
+    return None
+
+
+def path_is_untracked(root: Path, relative: str, git: str = "git") -> bool:
+    """True when Git does not track the path (an existing untracked draft counts); false when tracked.
+
+    If Git cannot answer, only a brand-new path counts as untracked (fail closed)."""
+    try:
+        result = subprocess.run(
+            [git, "--literal-pathspecs", "ls-files", "--error-unmatch", "--", relative],
+            cwd=root, text=True, encoding="utf-8", errors="replace",
+            capture_output=True, check=False, timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return not (root / relative).exists()
+    if result.returncode == 0:
+        return False
+    if result.returncode == 1:
+        return True
+    return not (root / relative).exists()
+
+
 def git_dirty_paths(root: Path) -> tuple[list[str] | None, str]:
     """Return every path that differs from HEAD, including untracked files."""
     try:
@@ -204,7 +374,7 @@ def git_dirty_paths(root: Path) -> tuple[list[str] | None, str]:
     return paths, "Git worktree status read"
 
 
-def load_lease(root: Path) -> tuple[dict[str, Any] | None, str]:
+def load_lease(root: Path, allow_sealed: bool = False) -> tuple[dict[str, Any] | None, str]:
     lease_path = root / ".ai-governance" / "implementation-lease.json"
     if not lease_path.is_file():
         return None, "No active implementation lease"
@@ -230,7 +400,8 @@ def load_lease(root: Path) -> tuple[dict[str, Any] | None, str]:
     }
     if not required.issubset(lease):
         return None, "Implementation lease is structurally invalid"
-    if lease["schema"] != 3 or lease["state"] != "ACTIVE":
+    accepted_states = {"ACTIVE", "SEALED"} if allow_sealed else {"ACTIVE"}
+    if lease["schema"] != 3 or not isinstance(lease["state"], str) or lease["state"] not in accepted_states:
         return None, "Implementation lease is inactive"
     try:
         expires = datetime.fromisoformat(lease["expires_at"].replace("Z", "+00:00"))

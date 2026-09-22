@@ -4,6 +4,9 @@ CLAUDE.local.md
 .ai-governance/implementation-lease.json
 .ai-governance/implementation-seals/
 .ai-governance/audit.log
+.ai-governance/owner-policy.json
+.ai-governance/lease-counter.json
+.ai-governance/empty-hooks/
 Saved/
 Intermediate/
 DerivedDataCache/
