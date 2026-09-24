@@ -2,6 +2,8 @@
 
 Bu klasör, [VISION-V3.md](../VISION-V3.md) F1–F2 içeriğinin taslaklarıdır. Hook'lar devre dışı bırakıldığında (F0) hedef konumlarına taşınır.
 
+> **2026-09-24 (F0):** Unity projesi gerektirmeyen tüm taslaklar hedef konumlarına taşındı. Burada yalnızca `unity-tools/` ve `unity-template/` kaldı; bunlar Unity projesi kurulunca (F1/F3) yerleştirilecek.
+
 | Taslak | Hedef konum | Faz |
 |---|---|---|
 | `game/IDENTITY.template.md` | `game/IDENTITY.md` | F1 |
