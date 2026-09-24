@@ -558,6 +558,401 @@ def validate_owner_policy_mode(v: Validation) -> None:
         v.check(any(entry.get("policy_sha256") for entry in audit), "audit entries in policy mode must record the policy hash")
 
 
+def validate_policy_lib(v: Validation) -> None:
+    import common
+    import policy_lib
+
+    git_path = shutil.which("git")
+    if not git_path:
+        v.check(False, "git must be available for the policy library tests")
+        return
+    policy = valid_owner_policy(str(Path(git_path).resolve()))
+    policy["lanes"] = [
+        {"name": "prototype", "allowed_paths": ["Assets/_Prototype/**", "Assets/_Prototype.meta"], "max_rigor": "R1", "extensions": [".cs", ".meta", ".txt"]},
+        {"name": "game", "allowed_paths": ["Assets/Game/**"], "max_rigor": "R2", "extensions": [".cs", ".meta"]},
+    ]
+    policy["policy_sha256"] = "0" * 64
+    good_cs = "using System;\nusing System.Collections.Generic;\nusing UnityEngine;\nusing UnityEngine.UI;\n\npublic class A : MonoBehaviour { }\n"
+    v.check(policy_lib.cs_scan(good_cs) == [], "an ordinary C# file must pass the scan")
+    v.check(policy_lib.cs_scan("// note\n/// <summary>Doc.</summary>\nclass A { }\n") == [], "whole-line comments must pass the scan")
+    bad_cs = {
+        "using System.IO;": "namespace",
+        "using System.Diagnostics;": "namespace",
+        "using UnityEngine.Networking;": "namespace",
+        "using static System.Math;": "using form",
+        "using Alias = System.Text.StringBuilder;": "using form",
+        "global using System;": "using form",
+        "\ufeffusing Microsoft.Win32;\nclass A {}": "bom and namespace root",
+        "namespace N { using System.Diagnostics; class A {} }": "using inside a namespace",
+        "using System; using System.Net;": "second using on a line",
+        "using /* c */ System.IO;": "comment inside a using",
+        "class A { void F() { System /* c */ . IO . File . Delete(\"x\"); } }": "comment splits a token",
+        "class A { void F() { System // c\n .IO.File.Delete(\"x\"); } }": "line comment splits a token",
+        "class A { string s = \"http://x\"; void F() { System.IO.File.Delete(s); } }": "slashes in a string hide nothing",
+        "class A { string s = \"\\U00000053\"; }": "long unicode escape",
+        "class A { void F() { Microsoft.Win32.Registry.CurrentUser.Close(); } }": "qualified registry access",
+        "class A { void F() { System.AppDomain.CurrentDomain.Load(null); } }": "runtime loading",
+        "class A { dynamic d; }": "dynamic",
+        "class A { void F() { global::System.IO.File.Delete(\"x\"); } }": "global qualified name",
+        "using UnityEditor;": "editor",
+        "class A { [InitializeOnLoad] static A() {} }": "initialize on load",
+        "class A { [DllImport(\"x\")] static extern void F(); }": "dll import",
+        "class A { void F() { System.Diagnostics.Process.Start(\"x\"); } }": "process",
+        "class A { void F() { var t = obj.GetType().GetMethod(\"M\"); } }": "reflection",
+        "class A { string s = \"\\u0053\"; }": "unicode escape",
+        "#if UNITY_EDITOR\nclass A {}\n#endif": "conditional compilation",
+        "#define X\nclass A {}": "preprocessor define",
+        "class A { string s = \"/*\"; void F() { System /* c */ . IO . File . Delete(\"x\"); } }": "string with a comment opener",
+        "class A { string s = \"//\"; void F() { System // c\n .IO.File.Delete(\"x\"); } }": "string with slashes and a line-comment split",
+        "class A { string s = @\"/*\"; void F() { System /* c */ . IO . File . Delete(\"x\"); } }": "verbatim string with a comment opener",
+        "class A { void F() { Sys​tem.IO.File.Delete(\"x\"); } }": "invisible formatting character",
+        "class A { void F() {\nSystem\n// c\n.IO.File.Delete(\"x\");\n} }": "whole-line comment splits a token",
+        "class A { int x; // trailing\n}": "trailing comments are refused",
+        "class A { string s = $\"{\"//\"}\"; void F() { System/*c*/.IO.File.Delete(s); } }": "interpolation hole with slashes",
+        "#region x'\nclass A { void F() { System /* c */ . IO . File . Delete(\"x\"); } }": "apostrophe in a directive",
+        ("class A { void F() { Sys" + chr(0x200B) + "tem.IO.File.Delete(\"x\"); } }"): "invisible character built with chr",
+        "class A { void F() {\nSystem\n#pragma warning disable\n.IO.File.Delete(\"x\");\n} }": "preprocessor directive splits a token",
+        "#nullable enable\nclass A {}\n": "any preprocessor directive is refused",
+        "//a\rSystem\r//b\r.IO.File.Delete(x);": "bare carriage returns hide a token behind comments",
+        ("//a" + chr(0x2028) + "System" + chr(0x2028) + "//b" + chr(0x2028) + ".IO.File.Delete(x);"): "line separator hides a token behind comments",
+        "class A { void F() { Unity.Foo.Bar(); } }": "unity qualified name",
+        "class A { void F() { var m = typeof(A).Module; } }": "module",
+        "class A { void F() { new WWW(\"x\"); } }": "www",
+        "class A { void F() { PlayerPrefs.SetString(\"a\", \"b\"); } }": "player prefs",
+        "class A { void F() { Application.OpenURL(\"x\"); } }": "open url",
+    }
+    for source, label in bad_cs.items():
+        v.check(bool(policy_lib.cs_scan(source)), f"the C# scan must reject ({label}): {source[:40]!r}")
+    v.check(policy_lib.cs_scan("class A { void F() { int x = Application.targetFrameRate; var y = obj.GetType(); var z = System.Math.Abs(1); } }") == [], "ordinary Application, GetType and System.Math use must pass")
+    for text in (
+        "-----BEGIN RSA PRIVATE KEY-----",
+        "key = AKIAABCDEFGHIJKLMNOP",
+        "ghp_" + "a" * 36,
+        "https://user:pass@example.com/x",
+        "password = hunter2hunter2",
+    ):
+        v.check(bool(policy_lib.secret_content_problems(text)), f"the secret scan must flag: {text[:30]!r}")
+    v.check(policy_lib.secret_content_problems("public int Score = 10; // token count") == [], "harmless text must pass the secret scan")
+    v.check(bool(policy_lib.LONG_RUN.search("A" * 130)), "a long base64-looking run must be flagged")
+    v.check(policy_lib.LONG_RUN.search("public int Score = 10;") is None, "ordinary text must not look like an encoded run")
+    for relative in (".env", "Assets/Game/id_rsa", "Assets/Game/server.pem", "Assets/Game/my_secret.json", "Assets/credentials.txt"):
+        v.check(policy_lib.secret_path_problem(relative) is not None, f"secret-looking path must be flagged: {relative}")
+    v.check(policy_lib.secret_path_problem("Assets/Game/Player.cs") is None, "an ordinary path must not be flagged")
+    lane = policy["lanes"][0]
+    v.check(policy_lib.path_problems(policy, lane, "Assets/_Prototype/A.cs") == [], "an in-lane path must pass")
+    for relative, reason in (
+        ("Assets/_Prototype/Editor/A.cs", "editor"),
+        ("Assets/_Prototype/A.dll", "dll"),
+        ("Assets/_Prototype/A.asmdef", "asmdef"),
+        ("Assets/_Prototype/.gitignore", "gitignore"),
+        ("Assets/_Prototype/A.png", "extension"),
+        ("Assets/Game/A.cs", "other lane"),
+        ("Assets/_Prototype/A.cs:stream", "stream"),
+        ("Assets/_Prototype/A.cs.", "trailing dot"),
+        (".claude/hooks/x.py", "controlled"),
+        ("scripts/x.py", "policy deny"),
+    ):
+        v.check(bool(policy_lib.path_problems(policy, lane, relative)), f"a path must be refused ({reason}): {relative}")
+    lease = {"lane": "prototype"}
+    v.check(policy_lib.write_problems(policy, lease, "Assets/_Prototype/A.cs", {"content": good_cs}) == [], "a compliant write must pass the write-time rules")
+    v.check(bool(policy_lib.write_problems(policy, lease, "Assets/_Prototype/Editor/A.cs", {"content": "class A {}"})), "a write into an Editor folder must be refused at write time")
+    v.check(bool(policy_lib.write_problems(policy, lease, "Assets/_Prototype/A.cs", {"content": "using UnityEditor;"})), "a write with editor code must be refused at write time")
+    v.check(bool(policy_lib.write_problems(policy, lease, "Assets/_Prototype/n.txt", {"content": "AKIAABCDEFGHIJKLMNOP"})), "a write with a secret must be refused at write time")
+    v.check(bool(policy_lib.write_problems(policy, lease, "Assets/_Prototype/A.cs", {"new_string": "System.IO.File.Delete(x);"})), "an edit fragment must be scanned at write time")
+    v.check(bool(policy_lib.write_problems(policy, {"lane": "unknown"}, "Assets/_Prototype/A.cs", {})), "an unknown lease lane must refuse writes")
+    v.check(bool(policy_lib.write_problems(policy, lease, "Assets/_Prototype/A.cs", {"content": "/*" * 150000})), "an oversized write must be refused before any scan")
+    v.check(bool(policy_lib.write_problems(policy, lease, "Assets/_Prototype/A.cs", {"edits": [{"old_string": "a", "new_string": "System.IO.File.Delete(x);"}]})), "MultiEdit fragments must be scanned")
+    with tempfile.TemporaryDirectory(prefix="aigdo-edit-") as scratch:
+        scratch_root = Path(scratch)
+        (scratch_root / "Assets" / "_Prototype").mkdir(parents=True)
+        (scratch_root / "Assets" / "_Prototype" / "S.cs").write_text("class A { void F() { System } }", encoding="utf-8")
+        split_edit = {"old_string": " } }", "new_string": ".IO.File.Delete(x); } }"}
+        v.check(policy_lib.write_problems(policy, lease, "Assets/_Prototype/A.cs", split_edit) == [], "a fragment alone can look harmless")
+        v.check(bool(policy_lib.write_problems(policy, lease, "Assets/_Prototype/S.cs", split_edit, scratch_root)), "an edit must be judged on the resulting file")
+        (scratch_root / "Assets" / "_Prototype" / "Huge.cs").write_text("x" * 900000, encoding="utf-8")
+        v.check(
+            bool(policy_lib.write_problems(policy, lease, "Assets/_Prototype/Huge.cs", {"old_string": "x", "new_string": "y"}, scratch_root)),
+            "an edit to a file too large to check must be refused",
+        )
+    import time as _time
+
+    started = _time.monotonic()
+    v.check(bool(policy_lib.write_problems(policy, lease, "Assets/_Prototype/n.txt", {"content": "eyJ" * 60000})), "a long repeated token run must be refused without hanging")
+    v.check(isinstance(policy_lib.write_problems(policy, lease, "Assets/_Prototype/n.txt", {"content": "://a:" * 39999}), list), "a long repeated credential-like run must finish")
+    v.check(_time.monotonic() - started < 20, "the two long adversarial runs must finish within 20 seconds")
+    v.check(len(policy_lib.write_problems(policy, lease, "Assets/_Prototype/A.cs", {"edits": [{"old_string": "a", "new_string": "b"}] * 51})) > 0, "too many edits in one write must be refused")
+    for entry, expected in (
+        ("Assets/_Prototype/**", "prototype"),
+        ("Assets/_Prototype/Sub/**", "prototype"),
+        ("Assets/_Prototype/A.cs", "prototype"),
+        ("Assets/_Prototype.meta", "prototype"),
+        ("Assets/Game/**", "game"),
+        ("Assets/Other/**", None),
+        ("Assets/**", None),
+        ("Assets/_PrototypeX/**", None),
+    ):
+        found = policy_lib.entry_lane(policy, entry)
+        v.check((found["name"] if found else None) == expected, f"entry lane for {entry} must be {expected}")
+    base = {"approval_mode": "hash", "approved_by": "independent-reviewer", "authored_by": "implementation-author",
+            "rigor": "R1", "allowed_commands": [], "commit_subject": "Add prototype file", "allowed_paths": ["Assets/_Prototype/**"]}
+    repo = {"git_branch": "agent/work"}
+    no_root = Path(tempfile.gettempdir()) / "aigdo-no-such-root"
+
+    def check(**changes: object) -> list[str]:
+        problems, _ = policy_lib.policy_activation_check(no_root, policy, {**base, **changes}, {}, repo)
+        return problems
+
+    v.check(check() == [], "a compliant task must pass the activation checks")
+    for label, changes in {
+        "rigor above lane": {"rigor": "R2"},
+        "rigor missing": {"rigor": "R9"},
+        "commands": {"allowed_commands": ["dotnet build"]},
+        "subject attribution": {"commit_subject": "Co-Authored-By: someone"},
+        "subject charset": {"commit_subject": "bad $(x)"},
+        "subject blank": {"commit_subject": "   "},
+        "subject missing": {"commit_subject": None},
+        "reviewer": {"approved_by": "somebody"},
+        "self review": {"authored_by": "independent-reviewer"},
+        "approval mode": {"approval_mode": "ssh-signature"},
+        "outside lane": {"allowed_paths": ["Assets/Other/**"]},
+        "two lanes": {"allowed_paths": ["Assets/_Prototype/**", "Assets/Game/**"]},
+        "denied path": {"allowed_paths": ["Assets/_Prototype/Editor/**"]},
+        "wildcard": {"allowed_paths": ["Assets/_Prototype/*.cs"]},
+    }.items():
+        v.check(bool(check(**changes)), f"the activation checks must refuse ({label})")
+    v.check(policy_lib.policy_activation_check(no_root, policy, {**base, "rigor": "R2", "allowed_paths": ["Assets/Game/**"]}, {}, repo)[0] != [], "R2 must exceed the R1 policy cap")
+    branch_repo = {"git_branch": "main"}
+    v.check(bool(policy_lib.policy_activation_check(no_root, policy, base, {}, branch_repo)[0]), "the wrong branch must be refused")
+    with tempfile.TemporaryDirectory(prefix="aigdo-branch-") as temp:
+        root = Path(temp)
+        (root / ".ai-governance").mkdir()
+        target = root / ".ai-governance" / "owner-policy.json"
+        main_policy = {
+            **valid_owner_policy(str(Path(git_path).resolve())), "required_branch": "main",
+            "commit_to_default_branch": True, "remote_name": "origin", "remote_url": "https://github.com/o/r",
+            "max_unpushed_commits": 5,
+        }
+        target.write_text(json.dumps(main_policy), encoding="utf-8")
+        v.check(common.load_owner_policy(root)[0] is not None, "a main-branch policy with every acknowledgement field must load")
+        for label, changes in {
+            "no acknowledgement": {"commit_to_default_branch": False},
+            "no remote": {"remote_url": None},
+            "credential url": {"remote_url": "https://user:pw@github.com/o/r"},
+            "http url": {"remote_url": "http://github.com/o/r"},
+            "traversal url": {"remote_url": "https://github.com/o/../r"},
+            "other remote": {"remote_name": "upstream"},
+            "no cap": {"max_unpushed_commits": 0},
+            "other base": {"base_branch": "develop"},
+            "rigor cap R3": {"required_branch": "agent/work", "effective_rigor_cap": "R3"},
+            "lane rigor R4": {"required_branch": "agent/work", "lanes": [{"name": "x", "allowed_paths": ["Assets/X/**"], "max_rigor": "R4", "extensions": [".cs"]}]},
+        }.items():
+            target.write_text(json.dumps({**main_policy, **changes}), encoding="utf-8")
+            v.check(common.load_owner_policy(root)[0] is None, f"a policy must be refused ({label})")
+    v.check(common.matches_any(".git/config", common.CONTROLLED_PATHS), ".git internals must be controlled paths")
+    v.check(not common.matches_any(".gitignore", common.CONTROLLED_PATHS), ".gitignore must not be a controlled path")
+
+
+def validate_owner_policy_activation(v: Validation) -> None:
+    git_path = shutil.which("git")
+    if not git_path:
+        v.check(False, "git must be available for the owner-policy activation tests")
+        return
+    git_path = str(Path(git_path).resolve())
+    write_hook = HOOKS / "govern_write.py"
+    with tempfile.TemporaryDirectory(prefix="aigdo-b1-") as temp:
+        project = Path(temp) / "project"
+        shutil.copytree(
+            ROOT, project,
+            ignore=shutil.ignore_patterns(
+                ".git", "__pycache__", "*.pyc", "implementation-lease.json", "implementation-seals",
+                "scheduled_tasks.lock", "owner-policy.json", "lease-counter.json", "empty-hooks",
+            ),
+        )
+
+        def git(*args: str) -> None:
+            subprocess.run([git_path, *args], cwd=project, check=True, capture_output=True)
+
+        git("init", "-q")
+        git("symbolic-ref", "HEAD", "refs/heads/agent/work")
+        git("config", "user.email", "validator@example.invalid")
+        git("config", "user.name", "AIGDO Validator")
+        task = project / "docs" / "05-production" / "tasks" / "TASK-POLICY-ATTEST.md"
+        review = project / "docs" / "07-evidence" / "READY-TASK-POLICY-ATTEST.md"
+        task.write_text(
+            "---\n"
+            "task_id: TASK-POLICY-ATTEST\n"
+            "status: READY_FOR_IMPLEMENTATION\n"
+            "authored_by: implementation-author\n"
+            "approved_by: independent-reviewer\n"
+            "ready_review_receipt: docs/07-evidence/READY-TASK-POLICY-ATTEST.md\n"
+            "rigor: R1\n"
+            "approval_mode: hash\n"
+            "system_id: SYS-POLICY-ATTEST\n"
+            "commit_subject: Add prototype test file\n"
+            "allowed_paths:\n"
+            "  - Assets/_Prototype/**\n"
+            "allowed_commands:\n"
+            "---\n"
+            "# Owner-policy attestation task\n",
+            encoding="utf-8",
+        )
+        review.write_text(
+            "---\n"
+            "review_id: REVIEW-TASK-POLICY-ATTEST-R1\n"
+            "task_id: TASK-POLICY-ATTEST\n"
+            "disposition: READY_FOR_IMPLEMENTATION\n"
+            "reviewer: independent-reviewer\n"
+            f"task_sha256: {sha256(task)}\n"
+            "reviewed_at: 2026-09-16T00:00:00Z\n"
+            "approval_mode: hash\n"
+            "signature_file: UNSET\n"
+            "allowed_signers_file: UNSET\n"
+            "---\n# Ready review\n",
+            encoding="utf-8",
+        )
+        plugins = project / "Assets" / "Plugins"
+        plugins.mkdir(parents=True, exist_ok=True)
+        (plugins / "P.cs").write_text("class P {}\n", encoding="utf-8")
+        (plugins / "P.cs.meta").write_text("fileFormatVersion: 2\nguid: fedcba9876543210fedcba9876543210\n", encoding="utf-8")
+        git("add", ".")
+        git("commit", "-qm", "policy base")
+        policy_file = project / ".ai-governance" / "owner-policy.json"
+        lease_path = project / ".ai-governance" / "implementation-lease.json"
+        lane_dir = project / "Assets" / "_Prototype"
+
+        def policy(**changes: object) -> dict:
+            base = valid_owner_policy(git_path)
+            base["lanes"] = [
+                {"name": "prototype", "allowed_paths": ["Assets/_Prototype/**"], "max_rigor": "R1", "extensions": [".cs", ".meta", ".txt", ".png", ".asset"]}
+            ]
+            return {**base, **changes}
+
+        def write_policy(**changes: object) -> None:
+            policy_file.write_text(json.dumps(policy(**changes)), encoding="utf-8")
+
+        def activate(*extra: str) -> subprocess.CompletedProcess[str]:
+            return subprocess.run(
+                [sys.executable, "scripts/activate_lease.py", "docs/05-production/tasks/TASK-POLICY-ATTEST.md", "--owner-policy", *extra],
+                cwd=project, input="", text=True, encoding="utf-8", errors="replace", capture_output=True, check=False,
+            )
+
+        def seal() -> subprocess.CompletedProcess[str]:
+            return subprocess.run(
+                [sys.executable, "scripts/seal_implementation.py"],
+                cwd=project, input="", text=True, encoding="utf-8", errors="replace", capture_output=True, check=False,
+            )
+
+        def hook_write(relative: str, content: str | None = None) -> str:
+            tool_input: dict = {"file_path": str(project / relative)}
+            if content is not None:
+                tool_input["content"] = content
+            payload = {"hook_event_name": "PreToolUse", "cwd": str(project), "tool_name": "Write", "tool_input": tool_input}
+            return decision(hook_call(write_hook, project, payload))
+
+        v.check(activate().returncode == 2, "owner-policy activation must be refused without a policy file")
+        write_policy()
+        v.check(activate("--inherit-dirty").returncode == 2, "owner-policy activation must refuse --inherit-dirty")
+        v.check(activate("--hours", "9").returncode == 2, "owner-policy activation must refuse hours above the policy limit")
+        v.check(activate("--hours=9").returncode == 2, "owner-policy activation must refuse hours above the limit in the = form")
+        v.check(activate("--hou", "2").returncode == 2, "an abbreviated --hours must be refused")
+        for label, changes in {
+            "reviewer": {"reviewer_ids": ["somebody-else"]},
+            "lane": {"lanes": [{"name": "other", "allowed_paths": ["Assets/Other/**"], "max_rigor": "R1", "extensions": [".cs"]}]},
+            "deny": {"deny_paths": ["Assets/_Prototype/**"]},
+            "rigor cap": {"effective_rigor_cap": "R0", "lanes": [{"name": "prototype", "allowed_paths": ["Assets/_Prototype/**"], "max_rigor": "R0", "extensions": [".cs"]}]},
+            "branch": {"required_branch": "agent/other"},
+        }.items():
+            write_policy(**changes)
+            refused = activate()
+            v.check(
+                refused.returncode == 2 and not lease_path.exists(),
+                f"owner-policy activation must be refused ({label}): {refused.stderr.strip()}",
+            )
+        write_policy(max_leases_per_day=2)
+        first = activate()
+        try:
+            lease = json.loads(lease_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            lease = {}
+        v.check(first.returncode == 0, f"a compliant task must activate under the policy without prompts: {first.stderr.strip()}")
+        v.check(
+            lease.get("authority") == "owner-policy" and lease.get("lane") == "prototype"
+            and lease.get("commit_subject") == "Add prototype test file" and bool(lease.get("policy_sha256")),
+            "an owner-policy lease must record its authority, lane, commit subject, and policy hash",
+        )
+        again = activate()
+        v.check(again.returncode == 2 and "unexpired ACTIVE lease" in again.stderr, "a second activation while a lease is active must be refused")
+        lease_path.unlink(missing_ok=True)
+        v.check(activate().returncode == 0, "a second lease within the daily limit must activate")
+        lease_path.unlink(missing_ok=True)
+        limited = activate()
+        v.check(limited.returncode == 2 and "daily lease limit" in limited.stderr, "the daily lease limit must be enforced")
+        write_policy()
+        v.check(activate().returncode == 0, "activation must succeed again once the limit allows it")
+
+        lane_dir.mkdir(parents=True, exist_ok=True)
+        (project / "Assets" / "Other").mkdir(parents=True, exist_ok=True)
+        v.check(hook_write("Assets/_Prototype/Good.cs", "using UnityEngine;\nclass G {}\n") == "allow", "the write hook must allow a compliant lane write")
+        v.check(hook_write("Assets/_Prototype/Editor/E.cs", "class E {}\n") == "deny", "the write hook must refuse an Editor-folder write")
+        v.check(hook_write("Assets/_Prototype/Bad.cs", "using UnityEditor;\n") == "deny", "the write hook must refuse editor code")
+        v.check(hook_write("Assets/_Prototype/note.txt", "AKIAABCDEFGHIJKLMNOP\n") == "deny", "the write hook must refuse a secret")
+        v.check(hook_write("Assets/_Prototype/Cf.cs", "class C { void F() { Sys​tem.IO.File.Delete(\"x\"); } }\n") == "deny", "the write hook must refuse an invisible formatting character")
+        v.check(hook_write("Assets/_Prototype/Big.cs", "/*" * 150000) == "deny", "the write hook must refuse an oversized write")
+        v.check(hook_write("Assets/_Prototype/Cf2.cs", "class C { void F() { Sys" + chr(0x200B) + "tem.IO.File.Delete(\"x\"); } }\n") == "deny", "the write hook must refuse an invisible character built with chr")
+        v.check(hook_write("Assets/_Prototype/Tr.cs", "class C { int x; // trailing\n}\n") == "deny", "the write hook must refuse a trailing comment")
+        v.check(hook_write("Assets/_Prototype/evil.dll", "MZ") == "deny", "the write hook must refuse a forbidden extension")
+        v.check(hook_write("Assets/Other/X.cs", "class X {}\n") == "deny", "the write hook must refuse a path outside the lease")
+        policy_file.unlink()
+        v.check(hook_write("Assets/_Prototype/Good.cs", "using UnityEngine;\nclass G {}\n") == "deny", "deleting the policy must stop an active owner-policy lease")
+        gone = seal()
+        v.check(gone.returncode != 0 and "Owner policy" in gone.stderr, "the seal must refuse when the policy is gone")
+        write_policy()
+        v.check(hook_write("Assets/_Prototype/Good.cs", "using UnityEngine;\nclass G {}\n") == "allow", "restoring the identical policy must restore the lease")
+
+        (lane_dir / "keep.txt").write_text("ok\n", encoding="utf-8")
+        (project / ".git" / "info" / "exclude").write_text("ignored.txt\n", encoding="utf-8")
+        bad_files: dict[str, str | bytes] = {
+            "Bad.cs": "using UnityEditor;\nclass A {}\n",
+            "evil.dll": "MZ",
+            ".gitignore": "x\n",
+            "note.txt": "AKIAABCDEFGHIJKLMNOP\n",
+            "ignored.txt": "hidden\n",
+            "utf16.cs": "using System;\nclass A {}\n".encode("utf-16"),
+            "bom.cs": "\ufeffusing Microsoft.Win32;\nclass B {}\n".encode("utf-8"),
+            "pic.png": b"AKIAABCDEFGHIJKLMNOP",
+            "split.cs": "class C { void F() { System /* c */ . IO . File . Delete(\"x\"); } }\n",
+            "ref.asset": "m_Script: {fileID: 11500000, guid: fedcba9876543210fedcba9876543210, type: 3}\n",
+            "quote.cs": "class Q { string s = \"/*\"; void F() { System /* c */ . IO . File . Delete(\"x\"); } }\n",
+        }
+        for name, content in bad_files.items():
+            data = content if isinstance(content, bytes) else content.encode("utf-8")
+            (lane_dir / name).write_bytes(data)
+            refused = seal()
+            v.check(refused.returncode != 0 and "owner-policy seal refused" in refused.stderr, f"the seal must refuse a lane file ({name}): {refused.stderr.strip()}")
+            (lane_dir / name).unlink()
+        (lane_dir / "A.cs.meta").write_text("fileFormatVersion: 2\nguid: 0123456789abcdef0123456789abcdef\n", encoding="utf-8")
+        (lane_dir / "B.cs.meta").write_text("fileFormatVersion: 2\nguid: 0123456789abcdef0123456789abcdef\n", encoding="utf-8")
+        duplicate = seal()
+        v.check(duplicate.returncode != 0 and "duplicate .meta GUID" in duplicate.stderr, "the seal must refuse duplicate .meta GUIDs")
+        (lane_dir / "B.cs.meta").unlink()
+        (project / "Assets" / "Other" / "X.cs").write_text("class X {}\n", encoding="utf-8")
+        outside = seal()
+        v.check(outside.returncode != 0 and "outside lease" in outside.stderr, "the seal must refuse a path outside the lease")
+        (project / "Assets" / "Other" / "X.cs").unlink()
+        write_policy(max_total_bytes=1999999)
+        changed = seal()
+        v.check(changed.returncode != 0 and "changed since activation" in changed.stderr, "the seal must refuse a policy changed after activation")
+        write_policy()
+        (lane_dir / "A.cs").write_text("using UnityEngine;\npublic class A : MonoBehaviour { }\n", encoding="utf-8")
+        sealed = seal()
+        v.check(sealed.returncode == 0, f"a compliant lane change must seal: {sealed.stderr.strip()}")
+        try:
+            sealed_lease = json.loads(lease_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            sealed_lease = {}
+        v.check(sealed_lease.get("state") == "SEALED" and sealed_lease.get("authority") == "owner-policy", "the sealed lease must keep its owner-policy authority")
+
+
 def validate_repository_attestation(v: Validation) -> None:
     with tempfile.TemporaryDirectory(prefix="aigdo-attestation-") as temp:
         project = Path(temp) / "project"
@@ -565,6 +960,7 @@ def validate_repository_attestation(v: Validation) -> None:
             ROOT, project,
             ignore=shutil.ignore_patterns(
                 "__pycache__", "*.pyc", "implementation-lease.json", "implementation-seals", "scheduled_tasks.lock",
+                "owner-policy.json", "lease-counter.json", "empty-hooks",
             ),
         )
         subprocess.run(["git", "init", "-q"], cwd=project, check=True)
@@ -794,6 +1190,7 @@ def validate_ssh_approval(v: Validation) -> None:
             ROOT, project,
             ignore=shutil.ignore_patterns(
                 "__pycache__", "*.pyc", "implementation-lease.json", "implementation-seals", "scheduled_tasks.lock",
+                "owner-policy.json", "lease-counter.json", "empty-hooks",
             ),
         )
         subprocess.run(["git", "init", "-q"], cwd=project, check=True)
@@ -862,6 +1259,8 @@ def main() -> None:
     validate_frontmatter(v)
     validate_hooks(v)
     validate_owner_policy_mode(v)
+    validate_policy_lib(v)
+    validate_owner_policy_activation(v)
     validate_repository_attestation(v)
     validate_ssh_approval(v)
     print(f"Checks: {v.checks}")

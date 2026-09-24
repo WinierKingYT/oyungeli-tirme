@@ -1,0 +1,100 @@
+{
+  "task_id": "TASK-SCHEMA-001",
+  "system_id": "SYS-V2-SCHEMAS-001",
+  "status": "READY_FOR_IMPLEMENTATION",
+  "rigor": "R1",
+  "approval_mode": "hash",
+  "authored_by": "Claude Sonnet 5 (drafting agent, this session)",
+  "approved_by": "Claude Sonnet 5 (independent code-reviewer agent, fresh context per review round)",
+  "ready_review_receipt": "docs/05-production/tasks/READY-TASK-SCHEMA-001.md",
+  "base_repository": "github.com/WinierKingYT/oyungeli-tirme",
+  "base_branch": "main",
+  "base_revision": "e3625798717da9b705befcaf3dbe4c1fabc0b5f1",
+  "scope": {
+    "in_scope": [
+      "schemas/v2/task-contract.schema.json",
+      "schemas/v2/fixtures/valid-example.json",
+      "schemas/v2/fixtures/invalid-missing-required.json",
+      "schemas/v2/fixtures/invalid-wildcard-path.json",
+      "schemas/v2/fixtures/invalid-unknown-field.json"
+    ],
+    "non_scope": [
+      "No controller code",
+      "No CONTROLLED_PATHS file changes",
+      "No change to v1.2's Markdown-frontmatter task contract mechanism",
+      "No capability/state-transition/evidence-manifest/seal/receipt schemas"
+    ]
+  },
+  "allowed_paths": [
+    "schemas/v2/task-contract.schema.json",
+    "schemas/v2/fixtures/valid-example.json",
+    "schemas/v2/fixtures/invalid-missing-required.json",
+    "schemas/v2/fixtures/invalid-wildcard-path.json",
+    "schemas/v2/fixtures/invalid-unknown-field.json"
+  ],
+  "denied_paths": [
+    ".ai-governance/**",
+    ".claude/hooks/**",
+    ".claude/settings.json",
+    "scripts/*.py"
+  ],
+  "allowed_commands": ["git diff *"],
+  "allowed_capabilities": [],
+  "network_policy": "none",
+  "expected_diff": {
+    "new_files": [
+      "schemas/v2/task-contract.schema.json",
+      "schemas/v2/fixtures/valid-example.json",
+      "schemas/v2/fixtures/invalid-missing-required.json",
+      "schemas/v2/fixtures/invalid-wildcard-path.json",
+      "schemas/v2/fixtures/invalid-unknown-field.json"
+    ],
+    "modified_files": [],
+    "removed_files": 0,
+    "dependencies_added": false,
+    "schema_or_interface_change": true
+  },
+  "acceptance_criteria": [
+    {
+      "id": "AC-01",
+      "category": "functional",
+      "criterion": "Schema file is valid JSON Schema (2020-12 meta-schema)",
+      "verification": "Validate the schema file against the JSON Schema meta-schema",
+      "required_evidence": "Validator output, exit code 0"
+    },
+    {
+      "id": "AC-02",
+      "category": "functional",
+      "criterion": "Schema validates the positive fixture",
+      "verification": "Run validator: schema + valid-example.json",
+      "required_evidence": "Validator output showing PASS"
+    },
+    {
+      "id": "AC-03",
+      "category": "functional",
+      "criterion": "Schema rejects all negative fixtures with the expected error class each",
+      "verification": "Run validator against each invalid-*.json",
+      "required_evidence": "Validator output showing FAIL for each, with the violated constraint named"
+    },
+    {
+      "id": "AC-04",
+      "category": "non-functional",
+      "criterion": "No CONTROLLED_PATHS file appears in the diff",
+      "verification": "git diff --name-only against allowed_paths",
+      "required_evidence": "Diff output"
+    }
+  ],
+  "stop_conditions": [
+    "Scope expansion beyond the single schema file and its fixtures",
+    "Documentation/code drift invalidates this contract",
+    "Material confidence becomes LOW on any required field's meaning",
+    "Lease is absent, expired, or invalid"
+  ],
+  "rollback": "Delete schemas/v2/ entirely; no other file depends on it yet.",
+  "lease_duration_hours": 8,
+  "invalidation_rules": [
+    "Base revision changes underneath the lease",
+    "Git worktree becomes dirty outside allowed_paths",
+    "Task contract file is modified after its digest was recorded"
+  ]
+}

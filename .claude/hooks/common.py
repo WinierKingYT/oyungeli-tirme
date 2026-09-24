@@ -27,6 +27,7 @@ CONTROLLED_PATHS = (
     "scripts/artifact_digest.py",
     "scripts/owner_policy.py",
     "scripts/agent_commit.py",
+    ".git/**",
     "scripts/validate_os.py",
     "tests/governance_attack_corpus.json",
     ".github/workflows/aigdo-validation.yml",
@@ -248,15 +249,27 @@ def _policy_problem(policy: Any) -> str | None:
     for key in ("policy_id", "required_branch", "base_branch"):
         if not isinstance(policy.get(key), str) or not policy[key]:
             return f"Owner policy field {key} is invalid"
-    if not policy["required_branch"].startswith("agent/"):
-        return "Owner policy required_branch must start with agent/"
+    if policy["required_branch"] == "main":
+        remote_url = policy.get("remote_url")
+        if (
+            policy.get("commit_to_default_branch") is not True
+            or policy["base_branch"] != "main"
+            or policy.get("remote_name") != "origin"
+            or not isinstance(remote_url, str)
+            or not re.fullmatch(r"https://[A-Za-z0-9.-]+/[\w./-]+", remote_url, re.ASCII)
+            or ".." in remote_url
+            or not _is_int(policy.get("max_unpushed_commits"))
+        ):
+            return "Owner policy branch main needs commit_to_default_branch, origin, an https remote_url, and max_unpushed_commits"
+    elif not policy["required_branch"].startswith("agent/"):
+        return "Owner policy required_branch must be main (with acknowledgement fields) or start with agent/"
     git_executable = policy.get("git_executable")
     if not isinstance(git_executable, str) or "<" in git_executable:
         return "Owner policy git_executable is invalid"
     git_path = Path(git_executable)
     if not git_path.is_absolute() or not git_path.is_file() or git_path.name.casefold() not in {"git", "git.exe"}:
         return "Owner policy git_executable must be an absolute path to an existing git executable"
-    if policy.get("effective_rigor_cap") not in RIGOR_LEVELS:
+    if policy.get("effective_rigor_cap") not in RIGOR_LEVELS[:3]:
         return "Owner policy effective_rigor_cap is invalid"
     hours = policy.get("max_lease_hours")
     if isinstance(hours, bool) or not isinstance(hours, (int, float)) or not 0 < hours <= 24:
@@ -281,7 +294,7 @@ def _policy_problem(policy: Any) -> str | None:
             or not lane["name"]
             or not _is_str_list(lane.get("allowed_paths"))
             or not lane["allowed_paths"]
-            or lane.get("max_rigor") not in RIGOR_LEVELS
+            or lane.get("max_rigor") not in RIGOR_LEVELS[:3]
             or not _is_str_list(lane.get("extensions"))
         ):
             return "Owner policy lane is invalid"
@@ -452,6 +465,10 @@ def load_lease(root: Path, allow_sealed: bool = False) -> tuple[dict[str, Any] |
         return None, "Lease has no allowed paths"
     if not isinstance(lease["allowed_commands"], list):
         return None, "Lease allowed_commands is invalid"
+    if lease.get("authority") == "owner-policy":
+        policy, _ = load_owner_policy(root)
+        if policy is None or policy["policy_sha256"] != lease.get("policy_sha256"):
+            return None, "Owner policy is missing, invalid, or changed since activation"
     return lease, "Active implementation lease is valid"
 
 

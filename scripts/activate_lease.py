@@ -17,7 +17,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 HOOKS = ROOT / ".claude" / "hooks"
 sys.path.insert(0, str(HOOKS))
-from common import CONTROLLED_PATHS, git_dirty_paths, git_state, matches_any, parse_frontmatter  # noqa: E402
+from common import CONTROLLED_PATHS, git_dirty_paths, git_state, load_owner_policy, matches_any, parse_frontmatter  # noqa: E402
+from policy_lib import bump_lease_counter, policy_activation_check  # noqa: E402
 
 
 UNSAFE_COMMAND = re.compile(r"[\n\r;|><`&]|\$\(")
@@ -80,7 +81,7 @@ def require_git_tracked(path: Path, label: str) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Activate a scoped implementation lease")
+    parser = argparse.ArgumentParser(description="Activate a scoped implementation lease", allow_abbrev=False)
     parser.add_argument("task_contract", help="Approved task contract path")
     parser.add_argument("--hours", type=float, default=8.0, help="Lease duration, maximum 24")
     parser.add_argument(
@@ -88,8 +89,24 @@ def main() -> None:
         action="store_true",
         help="Accept uncommitted changes that already sit inside the task's allowed_paths",
     )
+    parser.add_argument(
+        "--owner-policy",
+        action="store_true",
+        help="Activate under the owner's standing policy (no prompts; the policy checks apply)",
+    )
     args = parser.parse_args()
 
+    policy = None
+    if args.owner_policy:
+        if args.inherit_dirty:
+            fail("--inherit-dirty cannot be combined with --owner-policy")
+        policy, policy_reason = load_owner_policy(ROOT)
+        if policy is None:
+            fail(policy_reason)
+        if not any(item == "--hours" or item.startswith("--hours=") for item in sys.argv):
+            args.hours = float(policy["max_lease_hours"])
+        if args.hours > policy["max_lease_hours"]:
+            fail(f"--hours exceeds the policy limit of {policy['max_lease_hours']}")
     if not 0 < args.hours <= 24:
         fail("--hours must be greater than 0 and at most 24")
     task = (ROOT / args.task_contract).resolve(strict=False)
@@ -178,6 +195,11 @@ def main() -> None:
     repository, repository_reason = git_state(ROOT)
     if not repository:
         fail(repository_reason)
+    policy_extras: dict = {}
+    if policy is not None:
+        policy_problems, policy_extras = policy_activation_check(ROOT, policy, meta, review_meta, repository)
+        if policy_problems:
+            fail("owner-policy activation refused: " + "; ".join(policy_problems))
     dirty, dirty_reason = git_dirty_paths(ROOT)
     if dirty is None:
         fail(dirty_reason)
@@ -252,10 +274,11 @@ def main() -> None:
         for item in inherited:
             print(f"  - {ascii(item)}")
 
-    if input("\nType the exact task ID: ").strip() != meta["task_id"]:
-        fail("task ID confirmation failed")
-    if input("Type ACTIVATE: ").strip() != "ACTIVATE":
-        fail("activation phrase not confirmed")
+    if policy is None:
+        if input("\nType the exact task ID: ").strip() != meta["task_id"]:
+            fail("task ID confirmation failed")
+        if input("Type ACTIVATE: ").strip() != "ACTIVATE":
+            fail("activation phrase not confirmed")
 
     now = datetime.now(timezone.utc)
     if existing_bytes is not None:
@@ -280,10 +303,14 @@ def main() -> None:
         "allowed_commands": meta["allowed_commands"],
         "approval_mode": meta["approval_mode"],
         "inherited_paths": inherited_hashes,
+        "authority": "owner-policy" if policy is not None else "human",
+        **policy_extras,
         **repository,
     }
     destination = ROOT / ".ai-governance" / "implementation-lease.json"
     destination.write_text(json.dumps(lease, indent=2) + "\n", encoding="utf-8")
+    if policy is not None:
+        bump_lease_counter(ROOT)
     print(f"\nACTIVE: {meta['task_id']} until {lease['expires_at']}")
 
 

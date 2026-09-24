@@ -1,0 +1,50 @@
+{
+  "task_id": "TASK-SCHEMA-001",
+  "system_id": "SYS-V2-SCHEMAS-001",
+  "status": "READY_FOR_IMPLEMENTATION",
+  "rigor": "R1",
+  "approval_mode": "hash",
+  "authored_by": "Claude Sonnet 5 (drafting agent, this session)",
+  "approved_by": "Claude Sonnet 5 (independent code-reviewer agent, fresh context per review round)",
+  "ready_review_receipt": "docs/05-production/tasks/READY-TASK-SCHEMA-001.md",
+  "base_repository": "github.com/WinierKingYT/oyungeli-tirme",
+  "base_branch": "main",
+  "base_revision": "e3625798717da9b705befcaf3dbe4c1fabc0b5f1",
+  "scope": {
+    "in_scope": [
+      "schemas/v2/task-contract.schema.json"
+    ],
+    "non_scope": [
+      "No controller code"
+    ]
+  },
+  "allowed_paths": [
+    "**"
+  ],
+  "allowed_commands": ["git diff *"],
+  "network_policy": "none",
+  "expected_diff": {
+    "new_files": ["schemas/v2/task-contract.schema.json"],
+    "modified_files": [],
+    "removed_files": 0,
+    "dependencies_added": false,
+    "schema_or_interface_change": true
+  },
+  "acceptance_criteria": [
+    {
+      "id": "AC-01",
+      "category": "functional",
+      "criterion": "Schema file is valid JSON Schema (2020-12 meta-schema)",
+      "verification": "Validate the schema file against the JSON Schema meta-schema",
+      "required_evidence": "Validator output, exit code 0"
+    }
+  ],
+  "stop_conditions": [
+    "Scope expansion beyond the single schema file and its fixtures"
+  ],
+  "rollback": "Delete schemas/v2/ entirely; no other file depends on it yet.",
+  "lease_duration_hours": 8,
+  "invalidation_rules": [
+    "Base revision changes underneath the lease"
+  ]
+}

@@ -13,7 +13,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / ".claude" / "hooks"))
-from common import file_sha256, load_lease, matches_any  # noqa: E402
+from common import file_sha256, load_lease, load_owner_policy, matches_any  # noqa: E402
+from policy_lib import seal_policy_problems  # noqa: E402
 
 
 def git_bytes(*args: str) -> bytes:
@@ -43,6 +44,15 @@ def main() -> None:
     outside = [path for path in paths if not matches_any(path, lease["allowed_paths"])]
     if outside:
         raise SystemExit("ERROR: changed paths outside lease: " + ", ".join(outside))
+    if lease.get("authority") == "owner-policy":
+        policy, policy_reason = load_owner_policy(ROOT)
+        if policy is None:
+            raise SystemExit(f"ERROR: {policy_reason}")
+        if policy["policy_sha256"] != lease.get("policy_sha256"):
+            raise SystemExit("ERROR: the owner policy changed since activation")
+        seal_problems = seal_policy_problems(ROOT, policy, lease, paths)
+        if seal_problems:
+            raise SystemExit("ERROR: owner-policy seal refused: " + "; ".join(seal_problems))
 
     digest = hashlib.sha256()
     digest.update(b"AIGDO-IMPLEMENTATION-DIFF-V1\0")

@@ -49,6 +49,18 @@ def main() -> None:
 
     lease, lease_reason = load_lease(project_root())
     if lease and matches_any(root_relative, lease["allowed_paths"]):
+        if lease.get("authority") == "owner-policy":
+            from policy_lib import write_problems
+
+            lease_policy = load_owner_policy(project_root())[0]
+            problems = (
+                write_problems(lease_policy, lease, root_relative, tool_input, project_root())
+                if lease_policy is not None
+                else ["the owner policy is unavailable"]
+            )
+            if problems:
+                emit_decision(data, "deny", "Owner-policy write refused: " + "; ".join(problems))
+                return
         emit_decision(data, "allow", f"Path is inside active task {lease['task_id']}: {root_relative}")
         return
 
