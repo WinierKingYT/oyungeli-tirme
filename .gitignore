@@ -15,3 +15,7 @@ __pycache__/
 *.pyc
 
 .claude/scheduled_tasks.lock
+archive/v1.2/.ai-governance/implementation-lease.json
+archive/v1.2/.ai-governance/implementation-seals/
+archive/v1.2/.ai-governance/audit.log
+logs/
