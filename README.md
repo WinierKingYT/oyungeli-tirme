@@ -1,91 +1,46 @@
-# AI Game Development OS v1.2
+# AI Game Development OS v3
 
-Bu paket, Claude Code veya başka coding agent'ları “tek prompt ile oyun yaptırma” yaklaşımından çıkarıp kanıta dayalı, sınırları belirlenmiş bir üretim sürecine sokar.
+Claude Code ile Unity'de oyun geliştirirken yapay zekanın işini **daha kaliteli** yapmasını sağlayan çalışma ortamı: oyun tasarımı zanaatı, oyunu çalıştırarak doğrulama, ölçülen kalite ve sahibin zevkini öğrenen hafıza.
 
-Paketin varsayılan durumu güvenlidir: proje `PLAN` modunda açılır ve production dosyalarına yazma yetkisi aktif değildir. Bu paket kuruldu diye hiçbir oyun sistemi `READY`, `ACCEPTED` veya `PRODUCTION READY` sayılmaz.
+Bu bir onay sistemi değildir. v1.2'nin lease/seal/receipt yönetişimi `archive/v1.2/` altında ve `v1.2-final` etiketinde durur.
 
-## Ne sağlar?
+## Neler var
+| Katman | Nerede | Ne yapar |
+|---|---|---|
+| Güvenlik tabanı | `.claude/hooks/guard.py`, `.claude/settings.json` | Sadece geri dönüşü zor hataları engeller: Unity `.meta`/sahne/prefab dosyalarını metin olarak düzenleme, `git push`, toplu silme. Proje ayarları için sorar. |
+| Geri bildirim | `.claude/hooks/after_edit.py`, `session_context.py` | C# değişince doğrulama merdivenini hatırlatır, serileştirilmiş alan kaybını uyarır; oturum başında `memory/STATE.md`'yi yükler. |
+| Oyun bağlamı | `game/` | Oyun kimliği, ölçüler, sahibin karar vereceği sorular, sistem ve level kartları. |
+| Zanaat skill'leri | `.claude/skills/` | Sistem tasarımı, level design, gameplay kodu, oyun hissi; tasarım akışları (`/design-system`, `/design-level`), `/start-task`, `/unity-test`, `/playtest`, `/feedback`. |
+| Eleştirmenler | `.claude/agents/` | `design-critic`, `level-critic` (taze bağlam, tavsiye niteliğinde), `eval-scorer` (kör puanlama). |
+| Hafıza | `memory/` | Durum, kararlar, beğenilen/beğenilmeyen örnekler, playtest notları. |
+| Ölçüm | `evals/` | Puanlama tablosu, görev seti, sonuçlar, skill geliştirme süreci. |
+| Unity araçları (taslak) | `docs/v3/unity-tools/` | Ekran görüntüsü seti, sahne lint, kritik yol ölçümü, görüntü farkı, yerleşim planı doğrulama. Unity projesi kurulunca derlenecek. |
 
-- `AGENTS.md`: vendor-neutral ortak çalışma sözleşmesi.
-- `CLAUDE.md`: Claude Code yönlendiricisi; kısa ve kalıcı kurallar.
-- `.claude/rules/`: konu ve dosya yoluna göre kurallar.
-- `.claude/agents/`: araştırmacı, mimar, implementer ve bağımsız reviewer rolleri.
-- `.claude/skills/`: discovery, spec, implementation, verification ve closure iş akışları.
-- `.claude/settings.json`: başlangıçta plan modu ve hook kayıtları.
-- `.claude/hooks/`: Git-bound lease olmadan production yazımını ve varsayılan olarak MCP kullanımını engelleyen, hata halinde `exit 2` ile fail-closed çalışan denetim.
-- `docs/`: proje otoritesi, mimari, üretim, test ve kanıt kayıtları.
-- `docs/templates/`: her yeni sistem ve milestone için tekrar kullanılabilir şablonlar.
+## Kurulum (Unity projesi)
+Rehber: `docs/v3/unity-template/STRUCTURE.md`. Özet: Unity 6 LTS, resmî Unity plugin'i (`/plugin install unity@unity-agent-plugin`), proje kapsamlı Unity köprüsü, `.gitignore`/`.gitattributes` şablonları, bu reponun `.claude/`, `CLAUDE.md`, `game/`, `memory/`, `evals/` klasörleri. Proje yolunda ASCII olmayan karakterlerden kaçının.
 
-## Hızlı kurulum
+## Güvenlik hakkında dürüst not
+Hook'lar bir **emniyet kemeridir, güvenlik sınırı değildir**: zaman aşımında engellemez, bilinçli bir kullanıcıyı durdurmaz. Asıl güvence git'tir — ayrı branch, küçük commit'ler, push'u sahibin yapması, her şeyin geri alınabilmesi.
 
-1. Paketin içeriğini Git oyun reposunun köküne kopyala.
-2. `python --version` ile Python 3.10+ olduğunu doğrula.
-3. `python scripts/doctor.py --require-claude` çalıştır; runtime ve adversarial doğrulama tamamen geçmeden Claude oturumu açma.
-4. `docs/00-project/` ve `docs/01-design/` içindeki bootstrap alanlarını gerçek projeye göre doldur.
-5. Claude Code'u repo kökünde aç ve `/context` ile `CLAUDE.md` ile rules dosyalarının yüklendiğini doğrula.
-6. İlk iş olarak `/project-discovery` çalıştır. Doğrudan implementation başlatma.
+İnceleme seviyeleri de adıyla anılır:
+| Seviye | Ne | Bağımsızlık |
+|---|---|---|
+| Öz-kontrol | İşi yapan agent'ın kendi kontrolü | yok |
+| Taze bağlam | Aynı model ailesinden, konuşmayı görmemiş agent | kısmi (aynı model hataları paylaşabilir) |
+| Farklı model | Başka model/aile | daha yüksek |
+| Ölçüm | Test, lint, NavMesh, görüntü farkı gibi deterministik kontrol | yüksek |
+| Sahip | Oyunu oynayan ya da kararı veren insan | en yüksek |
+Kritik sistemler (kayıt, ağ, ekonomi) en az **ölçüm** veya **sahip** seviyesinde doğrulanır.
 
-## Implementation nasıl açılır?
+## Kanıtlanmış mı?
+Henüz değil. Sıradaki iş: aynı görevleri "düz Claude + Unity köprüsü" ile ve v3 ile yaptırıp kör puanlamak (`evals/`). Sistem bundan sonra doküman yazarak değil, ölçerek geliştirilir.
 
-Agent önce `docs/05-production/tasks/` altında bir task contract hazırlar. Bağımsız reviewer, task’in exact SHA-256 değerine bağlı ayrı bir READY receipt üretir. Task ve receipt commit’lenmiş, worktree temiz olmalıdır. Bundan sonra terminali **Claude dışında** açıp şunu çalıştır:
+## Belgeler
+- Vizyon ve yol haritası: `docs/VISION-V3.md`
+- Araştırma raporları: `docs/research/` (özet: `00-SUMMARY.md`)
+- Taslak ve yerleşim tablosu: `docs/v3/README.md`
 
-```bash
-python scripts/activate_lease.py docs/05-production/tasks/TASK-ID.md
+## Test
 ```
-
-Script sana task ID, base HEAD/branch, izinli dosya yolları ve izinli komutları gösterir; exact task ID ve `ACTIVATE` yazmadan lease oluşmaz. Lease varsayılan olarak sekiz saat sonra biter. HEAD veya branch değişirse lease geçersiz olur. Claude'un kendi Bash aracı bu scripti çalıştıramaz.
-
-Implementation bittiğinde insan operatör exact diff’i mühürler:
-
-```bash
-python scripts/seal_implementation.py
+python tests/hooks_smoke.py
 ```
-
-Seal, lease dışındaki değişmiş yolları reddeder; tracked binary diff’i ve untracked dosyaları SHA-256 ile bağlar; lease’i `SEALED` yaparak sonraki agent yazımlarını kapatır.
-
-İş bittiğinde veya durdurmak istediğinde yine Claude dışında:
-
-```bash
-python scripts/deactivate_lease.py
-```
-
-Aktif lease yalnızca contract içindeki `allowed_paths` alanlarına yazım izni verir. Task contract, READY receipt, HEAD veya branch değişirse izin kapanır. Pipe, redirection, command substitution veya birleşik shell komutları hiçbir zaman otomatik onaylanmaz. MCP araçları exact-name policy ile yönetilir; bilinmeyen MCP çağrısı lease yokken reddedilir, lease varken insan onayı ister.
-
-## Önemli güvenlik sınırı
-
-Hook'lar güçlü bir proje-içi kontrol katmanıdır fakat işletim sistemi sandbox'ı değildir. Hook runtime hiç başlatılamazsa Claude Code bunu tek başına fail-closed saymaz; bu yüzden paket Plan Mode, auto/bypass mode yasağı, `doctor.py`, CI ve branch protection katmanlarını birlikte kullanır. `ConfigChange` oturum içi settings/skill gevşetmesini bloke eder; ancak işletim sistemi ve Claude dışı programlar yine ayrı güven sınırıdır. Ayrıntılar `docs/00-project/SECURITY-THREAT-MODEL.md` içindedir.
-
-## İlk proje durumu
-
-Bu dağıtımın initial state'i:
-
-- Process: `BOOTSTRAPPED`
-- Project discovery: `NOT_STARTED`
-- Current milestone: `UNAPPROVED`
-- Current implementation task: `NONE`
-- Implementation lease: `INACTIVE`
-- Accepted systems: `0`
-
-Gemi oyunu için bilinen ürün kararları `examples/ship-game/` altında discovery girdisi olarak bulunur. Bunlar repo ve motor gerçekliği incelenmeden frozen architecture sayılmaz.
-
-Mevcut v1.1 kurulumu yükseltiliyorsa `MIGRATION-v1.1-to-v1.2.md` dosyasını uygula. Schema-2 lease’ler v1.2’de bilerek geçersizdir.
-
-## v1.2 repository-bound attestation özeti
-
-- Lease, temiz repository root + exact base HEAD + branch’e bağlı schema 3 authority’dir.
-- Human-only implementation seal exact changed-path listesi ve diff SHA-256 üretip yazma yetkisini kapatır.
-- Tüm `mcp__*` araçları deny-by-default policy hook’una girer.
-- `ConfigChange` project/user/local settings ve skill değişikliklerini mevcut oturumda bloke eder.
-- R4 task’ları OpenSSH public-key allowlist ile doğrulanan imzalı READY receipt gerektirir.
-- Saldırı korpusu; dirty-tree activation, branch drift, MCP gate, post-seal denial ve signature tampering testleri içerir.
-
-## Devralınan v1.1 hardening
-
-- Hook iç hataları `exit 2` ile bloklanır.
-- Pipe/redirection/compound/substitution shell kaçışları adversarial test edilir.
-- `/usr/bin/git push`, `git -C . push`, quoted subcommand ve nested shell varyantları yakalanır.
-- READY kararı task hash’ine bağlı bağımsız receipt gerektirir.
-- Acceptance receipt evidence-pack hash’i ve implementation revision’a bağlanır.
-- Her hook kararı `.ai-governance/audit.log` içine JSONL olarak kaydedilir.
-- Auto ve bypass permission modları project settings seviyesinde devre dışıdır.
-- CI workflow ve runtime doctor eklenmiştir.

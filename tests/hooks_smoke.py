@@ -15,6 +15,12 @@ cases = [
  ("Write .cs", {"tool_name":"Write","cwd":C,"tool_input":{"file_path":C+"/Assets/_Project/Scripts/Player.cs","content":"class P{}"}}, "allow"),
  ("git status", {"tool_name":"Bash","cwd":C,"tool_input":{"command":"git status"}}, "allow"),
  ("ProjectSettings .asset", {"tool_name":"Write","cwd":C,"tool_input":{"file_path":C+"/ProjectSettings/ProjectSettings.asset"}}, "deny"),
+ ("echo mentioning push (text only)", {"tool_name":"Bash","cwd":C,"tool_input":{"command":"echo \"do not "+PUSH+"\""}}, "allow"),
+ ("commit message mentioning push", {"tool_name":"Bash","cwd":C,"tool_input":{"command":"git commit -m \"docs: explain "+PUSH+" policy\""}}, "allow"),
+ ("git -C path push", {"tool_name":"Bash","cwd":C,"tool_input":{"command":"git -C \"C:/proj\" "+PUSH.split()[1]}}, "deny"),
+ ("push after semicolon", {"tool_name":"Bash","cwd":C,"tool_input":{"command":"git status; "+PUSH}}, "deny"),
+ ("Remove-Item Assets", {"tool_name":"PowerShell","cwd":C,"tool_input":{"command":"Remove-Item Assets/Old.cs"}}, "ask"),
+ ("Remove-Item -Recurse", {"tool_name":"PowerShell","cwd":C,"tool_input":{"command":"Remove-Item build -Recurse -Force"}}, "deny"),
  ("manifest.json", {"tool_name":"Edit","cwd":C,"tool_input":{"file_path":C+"/Packages/manifest.json"}}, "ask"),
 ]
 fail = 0
@@ -32,3 +38,4 @@ for hook, ev in [("after_edit.py", {"hook_event_name":"PostToolUse","tool_name":
     rc, out, err = run(hook, json.dumps(ev)); ok = rc == 0; fail += not ok
     print("PASS" if ok else "FAIL", "|", hook, ev["hook_event_name"], ev["tool_input"]["file_path"] if "tool_input" in ev else "", "rc", rc, "| out:", out[:250].replace("\n", " / "), "| err:", err[:150])
 print("FAILURES", fail)
+sys.exit(1 if fail else 0)

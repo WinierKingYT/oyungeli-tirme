@@ -32,19 +32,29 @@ ASK_WRITE_PATTERNS = (
     ".claude/hooks/*",
 )
 
+# Checked at the start of each command segment (split on && || ; | and newlines), so text that
+# merely mentions a command (echo, commit messages, file contents) is not blocked.
+GIT = r"git(?:\s+(?:-C|-c|--git-dir|--work-tree)\s+(?:\"[^\"]*\"|'[^']*'|\S+)|\s+--?[\w-]+(?:=\S+)?)*\s+"
 DENY_SHELL = (
-    (re.compile(r"\bgit\s+push\b"), "git push is done by the owner"),
-    (re.compile(r"\bgit\s+reset\s+--hard\b"), "git reset --hard discards work"),
-    (re.compile(r"\bgit\s+clean\s+-[a-z]*f"), "git clean -f deletes untracked files"),
-    (re.compile(r"\bgit\s+checkout\s+--\s"), "git checkout -- discards changes"),
-    (re.compile(r"\bgit\s+(rebase|filter-branch)\b"), "history rewrite is done by the owner"),
-    (re.compile(r"\brm\s+-[a-z]*r[a-z]*f|\brm\s+-[a-z]*f[a-z]*r"), "recursive force delete"),
-    (re.compile(r"Remove-Item\b.*-Recurse", re.IGNORECASE), "recursive delete"),
+    (re.compile(GIT + r"push\b"), "git push is done by the owner"),
+    (re.compile(GIT + r"reset\s+--hard\b"), "git reset --hard discards work"),
+    (re.compile(GIT + r"clean\s+-[a-z]*f"), "git clean -f deletes untracked files"),
+    (re.compile(GIT + r"checkout\s+--\s"), "git checkout -- discards changes"),
+    (re.compile(GIT + r"(rebase|filter-branch)\b"), "history rewrite is done by the owner"),
+    (re.compile(r"rm\s+-[a-z]*r[a-z]*f|rm\s+-[a-z]*f[a-z]*r"), "recursive force delete"),
+    (re.compile(r"(Remove-Item|ri|rm|del|rmdir|rd)\b.*-Recurse", re.IGNORECASE), "recursive delete"),
 )
 
 DELETE_PROTECTED = re.compile(
-    r"(rm|del|Remove-Item|rmdir)\b.*\b(Assets|ProjectSettings|Packages)\b", re.IGNORECASE
+    r"(rm|del|Remove-Item|ri|rmdir|rd)\b.*\b(Assets|ProjectSettings|Packages)\b", re.IGNORECASE
 )
+
+SEGMENT_SPLIT = re.compile(r"&&|\|\||;|\||\r?\n")
+SEGMENT_PREFIX = re.compile(r"^\s*(?:[({]\s*)*(?:&\s*)?(?:sudo\s+|command\s+|env\s+(?:\w+=\S+\s+)*)?")
+
+
+def command_segments(command: str) -> list[str]:
+    return [SEGMENT_PREFIX.sub("", part) for part in SEGMENT_SPLIT.split(command) if part.strip()]
 
 
 def decide(decision: str, reason: str) -> None:
@@ -91,11 +101,12 @@ def check_write(tool_input: dict, cwd: str) -> None:
 
 def check_shell(tool_input: dict) -> None:
     command = tool_input.get("command", "")
-    for pattern, reason in DENY_SHELL:
-        if pattern.search(command):
-            decide("deny", f"Blocked: {reason}.")
-    if DELETE_PROTECTED.search(command):
-        decide("ask", "Deleting inside Assets/ProjectSettings/Packages; confirm with the owner.")
+    for segment in command_segments(command):
+        for pattern, reason in DENY_SHELL:
+            if pattern.match(segment):
+                decide("deny", f"Blocked: {reason}.")
+        if DELETE_PROTECTED.match(segment):
+            decide("ask", "Deleting inside Assets/ProjectSettings/Packages; confirm with the owner.")
 
 
 def main() -> None:

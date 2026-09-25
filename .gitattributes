@@ -1,0 +1,10 @@
+# Text we author: always LF in the repository and working tree.
+* text=auto
+*.md    text eol=lf
+*.py    text eol=lf
+*.json  text eol=lf
+*.yml   text eol=lf
+*.yaml  text eol=lf
+*.cs    text eol=lf
+*.txt   text eol=lf
+*.ps1   text eol=crlf
