@@ -1,0 +1,29 @@
+name: hooks
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  smoke:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+        python: ["3.12", "3.13"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Hook smoke tests (repository path)
+        run: python tests/hooks_smoke.py
+      - name: Hook smoke tests (non-ASCII path, like the owner's machine)
+        shell: bash
+        run: |
+          target="$RUNNER_TEMP/oyungeliştirme-çalışma"
+          mkdir -p "$target"
+          cp -r .claude tests game memory "$target"/
+          cd "$target"
+          python tests/hooks_smoke.py
