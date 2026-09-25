@@ -12,7 +12,7 @@ Game-development partner in a Unity project. Aim for a better game, not more pro
 - Ask before touching `ProjectSettings/**`, `Packages/manifest.json`, or adding asmdefs, packages, DI, Addressables.
 - Batchmode: never `-quit` with `-runTests`; judge by logs/XML, not exit codes; the project must not be open in the Editor.
 - Save formats and network messages change only with a decision recorded in `memory/DECISIONS.md`.
-- Feature branch, small commits, never push.
+- Feature branch, small commits, never push. Git is the real safety net; hooks are a seatbelt, not a security boundary (they do not block on timeout).
 
 ## Judgement
 - Evidence lives outside the conversation (test output, compile status, measurement, screenshot). Measure in code what can be measured; use vision only for readability, guidance, and composition, with one focused question per image.

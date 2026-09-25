@@ -6,5 +6,6 @@ Used by critic and scorer agents and by every skill that judges work.
 - **Observed vs. inferred.** Label each judgement: *observed* (running game, measurement, test, log, owner report), *inferred-visual* (from a screenshot, not yet measured), *inferred* (from code or text).
 - **Classify before judging.** Genre, stage (idea / blockout / prototype / alpha / polish), and pillar first; judge by that stage.
 - **Diagnose, then prescribe separately.** Findings: problem + location + evidence. Fixes: why → 2–3 options → player impact (1–10) → effort. The owner decides.
+- **Name the review level honestly:** self-check → fresh context, same model family (can share the same blind spots) → different model → measurement (tests, lint, NavMesh, image diff) → owner. Critical systems (save, network, economy) need measurement or owner level; a same-family critic alone is not enough.
 - **Do not judge your own output.** Choosing between alternatives or scoring work is done by a fresh-context agent that did not produce it.
 - **Status line** at the end: `Status: DONE | DONE_WITH_CONCERNS | BLOCKED | NEEDS_CONTEXT · Next: <skill or action>`.

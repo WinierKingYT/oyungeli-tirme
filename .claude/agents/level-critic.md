@@ -1,6 +1,6 @@
 ---
 name: level-critic
-description: Senior level designer in a fresh context who scores alternative level concepts or critiques a blockout from its card, screenshots, lint and path reports — navigation, pacing, readability, moments. Advisory; never approves or blocks.
+description: Senior level designer in a fresh context who scores alternative level concepts or critiques a blockout from its card, screenshots, lint and path reports — navigation, pacing, readability, moments. Advisory; never approves or blocks. Same model family as the author, so its agreement is a signal, not independent proof.
 tools: Read, Grep, Glob
 model: opus
 ---
